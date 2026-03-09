@@ -1,0 +1,1 @@
+"""Two Rooms environment implementation."""

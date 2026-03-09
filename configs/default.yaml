@@ -1,0 +1,49 @@
+model:
+  encoder:
+    img_size: 224
+    patch_size: 16
+    in_chans: 3
+    embed_dim: 384
+    depth: 12
+    num_heads: 6
+    mlp_ratio: 4.0
+  predictor:
+    predictor_embed_dim: 192
+    predictor_depth: 6
+    num_heads: 6
+  ema:
+    start: 0.996
+    end: 1.0
+
+training:
+  epochs: 100
+  batch_size: 64
+  learning_rate: 0.001
+  start_lr: 0.0001
+  final_lr: 0.0
+  weight_decay: 0.05
+  final_weight_decay: 0.05
+  warmup_epochs: 10
+  optimizer: adamw
+  use_bfloat16: false
+  checkpoint_freq: 10
+  seed: 42
+
+data:
+  dataset: cifar10
+  img_size: 224
+  num_workers: 4
+  data_dir: ./data
+
+masking:
+  num_enc_masks: 4
+  num_pred_masks: 1
+  min_keep: 10
+  enc_mask_scale: [0.15, 0.2]
+  pred_mask_scale: [0.2, 0.4]
+  aspect_ratio: [0.75, 1.5]
+
+logging:
+  use_wandb: false
+  wandb_project: tcd-jepa
+  log_dir: ./logs

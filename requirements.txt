@@ -1,0 +1,14 @@
+torch>=2.0
+torchvision
+numpy
+scipy
+matplotlib
+seaborn
+pyyaml
+einops
+tqdm
+
+# Optional
+# giotto-tda    # For persistent homology (Phase 3)
+# omegaconf     # Alternative config management
+# wandb         # Experiment tracking
