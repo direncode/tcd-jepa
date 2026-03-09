@@ -4,7 +4,7 @@
 
 ## Abstract
 
-Joint Embedding Predictive Architectures (JEPA) predict in latent space using a static predictor trained end-to-end. TCD-JEPA extends this paradigm with three dynamically interacting systems: (1) a **Stream Encoder** that instruments JEPA's context pipeline with information flow monitoring, (2) an **Energy Explorer** that uses Langevin dynamics to explore uncertain regions of the latent energy landscape, and (3) a **Module Crystallizer** that applies persistent homology to exploration trajectories, identifying and instantiating reusable predictor modules. These systems form a recursive loop where crystallized modules enrich representations, enabling qualitatively new predictive capabilities that static JEPA architectures cannot achieve.
+Joint Embedding Predictive Architectures (JEPA) learn representations by predicting target embeddings from context embeddings in latent space, using a static predictor trained end-to-end. While this paradigm avoids the pitfalls of pixel-level reconstruction, the predictor architecture remains fixed -- its structure is designed, not discovered. TCD-JEPA extends JEPA with three dynamically interacting systems: (1) a **Stream Encoder** that instruments JEPA's context pipeline with information flow monitoring, (2) an **Energy Explorer** that uses Langevin dynamics to probe uncertain regions of the latent energy landscape, and (3) a **Module Crystallizer** that applies persistent homology to exploration trajectories, identifying stable topological features and instantiating them as reusable predictor modules. These systems form a recursive feedback loop where crystallized modules enrich representations, enabling the discovery of predictive capabilities that static architectures cannot achieve. We demonstrate this self-organizing mechanism on CIFAR-10 and a Two Rooms navigation environment, showing module formation, convergence of the recursive loop, and qualitative differences from vanilla JEPA.
 
 ## Key Insight
 
@@ -12,24 +12,50 @@ JEPA's predictor is *designed*, not *discovered*. TCD-JEPA proposes that predict
 
 ## Architecture
 
-TCD-JEPA consists of three self-organizing systems operating over JEPA's latent space:
+```
+                        RECURSIVE LOOP
+    ┌─────────────────────────────────────────────────┐
+    │                                                 │
+    ▼                                                 │
+┌──────────┐     ┌──────────────┐     ┌───────────┐  │
+│ System 1 │────▶│   System 2   │────▶│ System 3  │──┘
+│  Stream  │     │   Energy     │     │  Module   │
+│ Encoder  │     │  Explorer    │     │Crystallizer│
+└──────────┘     └──────────────┘     └───────────┘
+     │                 │                    │
+     │            Langevin             Persistent
+  ViT +           Dynamics             Homology
+  EMA              on E(z)            on trajectories
+  JEPA                │                    │
+                 Trajectories    ┌─────────┴─────────┐
+                  {z_0,...,z_T}  │  H_0 → Attractor  │
+                                │  H_1 → Cycle       │
+                                │  H_2 → Boundary    │
+                                └────────────────────┘
+```
 
-**System 1 — Knowledge Corpus Releaser (Stream Encoder)**
+**System 1 -- Knowledge Corpus Releaser (Stream Encoder)**
 - Wraps JEPA's ViT encoder with instrumentation hooks
-- Monitors representation diversity and information flow rates
-- Provides the energy surface that System 2 explores
+- Monitors representation diversity and information flow rates per layer
+- Provides the energy surface E(z) = ||p(s_theta(x)) - sg(s_xi(y))||^2
 
-**System 2 — Recursive Manifold Knowledge Enveloper (Energy Explorer)**
-- Explores the energy landscape via Langevin dynamics
-- Targets high-entropy, low-confidence "blank space" regions
-- Generates trajectories through latent space
+**System 2 -- Recursive Manifold Knowledge Enveloper (Energy Explorer)**
+- Detects blank spaces via Hessian eigenvalue analysis and perturbation variance
+- Explores the energy landscape via Langevin dynamics: z_{t+1} = z_t - eta * grad E + noise
+- Temperature biased toward blank regions (lower beta = more exploration)
+- Computes Fisher information metric for Riemannian geometry of the latent space
+- Records exploration trajectories for System 3
 
-**System 3 — Universal Module Former (Module Crystallizer)**
-- Applies persistent homology to trajectory point clouds
-- Identifies stable topological features (cycles, components, voids)
-- Crystallizes features into lightweight predictor modules
+**System 3 -- Universal Module Former (Module Crystallizer)**
+- Computes Vietoris-Rips persistent homology on trajectory point clouds
+- Analyzes persistence diagrams to identify stable topological features
+- Converts features to predictor modules:
+  - H_0 (connected components) -> **AttractorModule**: local predictor centered on cluster centroid
+  - H_1 (loops) -> **CycleModule**: periodic predictor with learnable frequencies
+  - H_2 (voids) -> **BoundaryModule**: interface predictor with boundary detection
+- Manages module lifecycle: registration, performance tracking, pruning
 
-**Recursive Loop:** System 3's modules feed back into System 1, enriching representations → System 2 explores the richer landscape → System 3 discovers new modules → repeat until convergence.
+**Recursive Loop:** System 3's modules feed back into System 1, enriching representations -> System 2 explores the richer landscape -> System 3 discovers new modules -> convergence monitored via C(t).
 
 ## Quick Start
 
@@ -38,81 +64,228 @@ TCD-JEPA consists of three self-organizing systems operating over JEPA's latent 
 ```bash
 git clone https://github.com/direncode/tcd-jepa.git
 cd tcd-jepa
-pip install -e .
+pip install -e ".[dev]"
+
+# For persistent homology (optional, falls back to scipy)
+pip install giotto-tda  # or: pip install ripser persim
 ```
 
-### Minimal Example
+### Training
+
+```bash
+# Vanilla JEPA on CIFAR-10
+python train.py --config configs/small_scale.yaml
+
+# TCD-JEPA with recursive loop
+python train.py --config configs/small_scale.yaml --tcd
+
+# Two Rooms experiment (vanilla vs TCD-JEPA comparison)
+python -m experiments.two_rooms.run --config configs/two_rooms.yaml
+
+# CIFAR-10 comparison experiment
+python -m experiments.image.run --config configs/small_scale.yaml
+```
+
+### Minimal Code Example
 
 ```python
-from tcd_jepa.models import build_tcd_jepa
-
-# Build a small-scale model
-model = build_tcd_jepa(
-    img_size=32,
-    patch_size=4,
-    embed_dim=192,
-    depth=6,
-    num_heads=3,
-    predictor_embed_dim=96,
-    predictor_depth=4,
-)
-
-# Forward pass with masks
 import torch
+from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
+from tcd_jepa.core.recursive_loop import RecursiveLoop
+from tcd_jepa.core.system1_encoder import StreamEncoder
+
+# Build model
+model = build_tcd_jepa(img_size=32, patch_size=4, embed_dim=192, depth=6,
+                       num_heads=3, predictor_embed_dim=96, predictor_depth=4)
+
+# Standard JEPA forward pass
 images = torch.randn(4, 3, 32, 32)
 masks_enc = [torch.randint(0, 64, (4, 10))]
 masks_pred = [torch.randint(0, 64, (4, 16))]
 result = model(images, masks_enc, masks_pred)
 print(f"Loss: {result['loss'].item():.4f}")
+
+# TCD recursive loop
+loop = RecursiveLoop(embed_dim=192, explore_every=1, crystallize_every=2,
+                     langevin_steps=20)
+stream = StreamEncoder(model.context_encoder, model.target_encoder)
+
+with torch.no_grad():
+    z = model.context_encoder(images)
+    t = model.target_encoder(images)
+energy_fn = stream.make_energy_fn(t)
+loop_result = loop.step(z, energy_fn, epoch=0)
+print(f"Explored: {loop_result['explored']}, Modules: {loop.num_modules}")
+```
+
+## Experiments
+
+### Two Rooms
+
+The Two Rooms environment is a gridworld with two rooms connected by a doorway. The agent generates random trajectories producing RGB observations. TCD-JEPA is compared against vanilla JEPA to demonstrate:
+- Module formation over training
+- Convergence of the recursive loop
+- Qualitative representation differences
+
+```bash
+python -m experiments.two_rooms.run --config configs/two_rooms.yaml training.epochs=20
+```
+
+### CIFAR-10
+
+Standard CIFAR-10 pretraining with ViT-tiny. The contribution is not SOTA benchmarks but demonstrating that the self-organizing mechanism works.
+
+```bash
+python -m experiments.image.run --config configs/small_scale.yaml training.epochs=30
+```
+
+### Ablation Studies
+
+Test each system individually:
+
+```bash
+# Full TCD-JEPA
+python train.py --config configs/ablation.yaml --tcd
+
+# Vanilla JEPA baseline
+python train.py --config configs/ablation.yaml
 ```
 
 ## Mathematical Framework
 
 **Energy Function:**
-```
-E_pred(x, y) = ||p_φ(s_θ(x)) - sg(s_ξ(y))||²
-```
-where `s_θ` is the context encoder, `s_ξ` is the EMA target encoder, `p_φ` is the predictor, and `sg` is stop-gradient.
+
+E(x, y) = ||s_theta(x) - s_xi(y)||^2
+
+where s_theta is the context encoder and s_xi is the EMA target encoder. The predictor energy:
+
+E_pred(x, y) = ||p_phi(s_theta(x)) - sg(s_xi(y))||^2
+
+**Blank Space Detection (System 2):**
+
+H(z) = nabla^2_z E(z) -- the Hessian of energy
+blank_space(z) = True if lambda_min(H(z)) < tau
+
+Also: regions where predictor output variance is high under perturbation.
 
 **Langevin Exploration (System 2):**
-```
-z_{t+1} = z_t - η∇_z E(z_t) + √(2η/β) · ε_t
-```
+
+z_{t+1} = z_t - eta * nabla_z E(z_t) + sqrt(2*eta/beta) * epsilon_t,  epsilon ~ N(0, I)
+
+Temperature beta biased to explore blank space regions (lower beta = more exploration in uncertain areas).
+
+**Fisher Information Metric (System 2):**
+
+F_ij(z) = (1/sigma^2) * sum_k (dp_k/dz_i)(dp_k/dz_j)
+
+Defines the Riemannian geometry of the latent space for geometrically-aware exploration.
 
 **Persistent Homology (System 3):**
-Vietoris-Rips complexes computed at multiple scales on trajectory point clouds, with features thresholded by persistence for module instantiation.
 
-**Convergence:**
-```
+Given trajectory T = {z_0, z_1, ..., z_N}, compute the Vietoris-Rips complex at multiple scales:
+- H_0: connected components (clusters) -> AttractorModule
+- H_1: loops (cycles) -> CycleModule
+- H_2: voids (cavities) -> BoundaryModule
+
+Features with persistence > tau_module become module candidates.
+
+**Convergence Metric:**
+
 C(t) = |M(t) - M(t-1)| / M(t) + KL(R(t) || R(t-1)) + |S(t) - S(t-1)|
-```
+
+where M(t) = active modules, R(t) = representation distribution, S(t) = energy landscape smoothness. System converges when C(t) < epsilon for k consecutive iterations.
 
 ## Project Structure
 
 ```
 tcd-jepa/
+├── train.py                    # Main training entry point
+├── configs/
+│   ├── small_scale.yaml        # CIFAR-10 small-scale config
+│   ├── two_rooms.yaml          # Two Rooms environment config
+│   ├── ablation.yaml           # Ablation study config
+│   └── default.yaml            # Full-scale default config
 ├── tcd_jepa/
-│   ├── core/           # Systems 1-3 and recursive loop
-│   ├── modules/        # Predictor variants and module registry
-│   ├── exploration/    # Langevin dynamics and trajectory tracking
-│   ├── topology/       # Persistent homology and feature extraction
-│   ├── models/         # ViT encoder, context/target encoders, full model
-│   ├── training/       # Trainer, losses, schedulers, metrics
-│   └── utils/          # Config, logging, masking, checkpointing
-├── configs/            # YAML experiment configs
-├── experiments/        # Experiment runners and analysis
-├── tests/              # Unit and integration tests
-└── docs/               # Architecture and math documentation
+│   ├── core/
+│   │   ├── energy_landscape.py # Energy function E(z)
+│   │   ├── system1_encoder.py  # StreamEncoder orchestrator
+│   │   ├── system2_explorer.py # EnergyExplorer orchestrator
+│   │   ├── system3_crystallizer.py  # ModuleCrystallizer orchestrator
+│   │   └── recursive_loop.py  # RecursiveLoop + ConvergenceMonitor
+│   ├── exploration/
+│   │   ├── blank_space_detector.py  # Hessian + variance detection
+│   │   ├── langevin.py         # Langevin dynamics sampler
+│   │   ├── trajectory_tracker.py    # Trajectory storage
+│   │   └── fisher_metric.py    # Fisher information metric
+│   ├── topology/
+│   │   ├── persistent_homology.py   # Vietoris-Rips PH (giotto/ripser/scipy)
+│   │   ├── persistence_diagrams.py  # Diagram analysis + thresholding
+│   │   └── feature_extraction.py    # TopologicalFeature -> module mapping
+│   ├── modules/
+│   │   ├── predictor.py        # Vanilla JEPA predictor (I-JEPA compatible)
+│   │   ├── dynamic_predictor.py     # Predictor + crystallized modules
+│   │   ├── module_factory.py   # Attractor/Cycle/Boundary module creation
+│   │   └── module_registry.py  # Module lifecycle management
+│   ├── models/
+│   │   ├── vision_transformer.py    # ViT encoder (I-JEPA compatible)
+│   │   ├── context_encoder.py  # Instrumented encoder (System 1)
+│   │   ├── target_encoder.py   # EMA target encoder
+│   │   └── tcd_jepa_model.py   # Full JEPA model assembly
+│   ├── training/
+│   │   ├── trainer.py          # Training loop
+│   │   ├── losses.py           # JEPA loss functions
+│   │   ├── schedulers.py       # LR and WD schedules
+│   │   └── metrics.py          # Metric accumulation
+│   └── utils/
+│       ├── config.py           # YAML config + CLI overrides
+│       ├── logging.py          # CSV + wandb logging
+│       ├── masking.py          # Block mask generation (I-JEPA)
+│       ├── visualization.py    # Energy heatmaps, trajectories, PD plots
+│       ├── tensors.py          # Tensor utilities
+│       └── checkpointing.py    # Model checkpoint save/load
+├── experiments/
+│   ├── two_rooms/              # Two Rooms gridworld experiments
+│   │   ├── environment.py      # TwoRoomsEnv + TwoRoomsDataset
+│   │   ├── run.py              # Vanilla vs TCD-JEPA comparison
+│   │   └── analysis.py         # Result analysis
+│   └── image/                  # CIFAR-10 experiments
+│       ├── run.py              # Training + comparison
+│       └── analysis.py         # Result analysis
+├── tests/                      # 65 tests across all systems
+│   ├── test_system1.py         # Encoder, context, target, utils
+│   ├── test_system2.py         # Blank space, Langevin, Fisher, explorer
+│   ├── test_system3.py         # PH, persistence, factory, registry, crystallizer
+│   ├── test_recursive_loop.py  # Convergence, loop orchestration
+│   └── test_integration.py     # Full model, losses, schedulers
+├── paper/
+│   └── tcd_jepa.tex            # ArXiv preprint (LaTeX)
+└── pyproject.toml              # Package metadata + dependencies
+```
+
+## Dependencies
+
+```
+torch >= 2.0
+torchvision
+numpy
+scipy
+matplotlib
+seaborn
+pyyaml
+einops
+tqdm
+giotto-tda          # persistent homology (optional, falls back to scipy)
+wandb               # experiment tracking (optional)
 ```
 
 ## Acknowledgments
 
-TCD-JEPA builds on the JEPA paradigm introduced by Yann LeCun and implemented by Meta's FAIR team. We gratefully acknowledge the following open-source implementations:
+TCD-JEPA builds on the JEPA paradigm introduced by Yann LeCun and implemented by Meta's FAIR team. We gratefully acknowledge:
 
-- [I-JEPA](https://github.com/facebookresearch/ijepa) (Assran et al., 2023)
-- [V-JEPA](https://github.com/facebookresearch/jepa) (Bardes et al., 2024)
-- [V-JEPA 2](https://github.com/facebookresearch/vjepa2) (Bardes et al., 2025)
-- [eb_jepa](https://github.com/facebookresearch/eb_jepa) (Meta FAIR)
+- [I-JEPA](https://github.com/facebookresearch/ijepa) (Assran et al., 2023) -- core architecture reference
+- [V-JEPA](https://github.com/facebookresearch/jepa) (Bardes et al., 2024) -- video extension
+- [V-JEPA 2](https://github.com/facebookresearch/vjepa2) (Bardes et al., 2025) -- scaled video JEPA
+- [eb_jepa](https://github.com/facebookresearch/eb_jepa) (Meta FAIR) -- energy-based JEPA
 
 ## Citation
 

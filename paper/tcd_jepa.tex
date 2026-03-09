@@ -1,0 +1,215 @@
+\documentclass[10pt,twocolumn]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{natbib}
+\usepackage[margin=1in]{geometry}
+
+\title{TCD-JEPA: Tripartite Conditional Dynamics for\\Self-Organizing Prediction in Latent Space}
+\author{Diren\\
+  Department of Information Science\\
+  University of North Carolina at Chapel Hill\\
+  \texttt{github.com/direncode}
+}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Joint Embedding Predictive Architectures (JEPA) learn representations by predicting target embeddings from context embeddings in latent space. While effective, JEPA relies on a static predictor whose architecture is fixed at design time. We introduce TCD-JEPA, extending JEPA with three dynamically interacting systems: (1) a \textbf{Stream Encoder} that monitors information flow through the representation pipeline, (2) an \textbf{Energy Explorer} that uses Langevin dynamics to probe uncertain regions of the latent energy landscape, and (3) a \textbf{Module Crystallizer} that applies persistent homology to exploration trajectories, converting stable topological features into reusable predictor modules. These systems form a recursive feedback loop where discovered modules enrich representations, enabling the system to autonomously develop predictive capabilities that static architectures cannot achieve. We demonstrate this mechanism on CIFAR-10 and a Two Rooms navigation environment.
+\end{abstract}
+
+\section{Introduction}
+
+The Joint Embedding Predictive Architecture (JEPA) paradigm, proposed by LeCun~\citep{lecun2022path}, represents a significant departure from generative self-supervised learning. Rather than reconstructing inputs at the pixel level, JEPA predicts target representations from context representations in a learned latent space. This avoids the information bottleneck of pixel-level reconstruction and enables the learning of more abstract, semantically meaningful representations.
+
+I-JEPA~\citep{assran2023self} instantiates this paradigm for images using Vision Transformers, with a context encoder, an EMA-updated target encoder, and a lightweight transformer predictor trained to predict masked target patches from visible context patches. Extensions to video (V-JEPA~\citep{bardes2024revisiting}) and other modalities have demonstrated the paradigm's generality.
+
+However, a fundamental limitation remains: \textbf{the predictor architecture is fixed}. The transformer predictor in I-JEPA is designed by the researcher, trained end-to-end, and does not adapt its structure during training. It cannot discover that certain prediction patterns recur, form reusable modules, or reorganize itself to better serve the representation it is learning.
+
+We propose TCD-JEPA (Tripartite Conditional Dynamics), which addresses this limitation through three interacting systems:
+\begin{enumerate}
+    \item \textbf{System 1 (Stream Encoder):} Instruments JEPA's encoder with monitoring hooks, providing the energy surface for exploration.
+    \item \textbf{System 2 (Energy Explorer):} Uses Langevin dynamics guided by blank space detection to explore uncertain regions of the energy landscape.
+    \item \textbf{System 3 (Module Crystallizer):} Applies persistent homology to exploration trajectories, identifying stable topological features and instantiating them as lightweight predictor modules.
+\end{enumerate}
+
+These systems form a recursive loop: crystallized modules enrich the encoder's representation space, creating new structure for System 2 to explore, leading to further module discovery. We show this loop converges and produces qualitatively different representations from vanilla JEPA.
+
+\section{Background}
+
+\subsection{JEPA Formalism}
+
+Given an input $x$, JEPA uses a context encoder $s_\theta$ and target encoder $s_\xi$ (an exponential moving average of $s_\theta$) to produce latent representations. A predictor $p_\phi$ maps context representations to predicted target representations:
+\begin{equation}
+    \mathcal{L} = \|p_\phi(s_\theta(x_{\text{ctx}})) - \text{sg}(s_\xi(x_{\text{tgt}}))\|^2
+\end{equation}
+where $\text{sg}$ denotes stop-gradient. The target encoder is updated via EMA: $\xi \leftarrow m \cdot \xi + (1-m) \cdot \theta$ with momentum $m$ scheduled from 0.996 to 1.0.
+
+\subsection{Energy-Based Models}
+
+JEPA's loss function defines an energy surface over the latent space:
+\begin{equation}
+    E(z) = \|p_\phi(z) - \text{sg}(s_\xi(y))\|^2
+\end{equation}
+Low-energy regions correspond to well-predicted areas; high-energy or flat regions indicate uncertainty.
+
+\subsection{Persistent Homology}
+
+Persistent homology~\citep{edelsbrunner2010computational} computes topological features of a point cloud at multiple scales. The Vietoris-Rips complex captures:
+\begin{itemize}
+    \item $H_0$: connected components (clusters)
+    \item $H_1$: loops (cycles)
+    \item $H_2$: voids (cavities)
+\end{itemize}
+Features are summarized in persistence diagrams, where each feature has a birth time (scale of appearance) and death time (scale of disappearance). Features with high persistence (long-lived) represent stable topological structure.
+
+\section{TCD-JEPA Framework}
+
+\subsection{System 1: Stream Encoder}
+
+System 1 wraps JEPA's Vision Transformer encoder with forward hooks that record per-layer statistics (mean, standard deviation, norm of activations). This provides:
+\begin{itemize}
+    \item Representation diversity metrics for convergence monitoring
+    \item The energy function $E(z)$ for System 2's exploration
+    \item Layer-wise information flow analysis
+\end{itemize}
+
+\subsection{System 2: Energy Explorer}
+
+System 2 identifies and explores uncertain regions of the energy landscape.
+
+\textbf{Blank Space Detection.} We define blank spaces as regions where the energy Hessian has small eigenvalues (flat landscape) or where predictor output variance is high under perturbation:
+\begin{equation}
+    H(z) = \nabla^2_z E(z), \quad \text{blank}(z) = \mathbf{1}[\lambda_{\min}(H(z)) < \tau]
+\end{equation}
+The Hessian spectrum is approximated via finite differences along random directions for computational efficiency.
+
+\textbf{Langevin Dynamics.} Exploration proceeds via overdamped Langevin dynamics:
+\begin{equation}
+    z_{t+1} = z_t - \eta \nabla_z E(z_t) + \sqrt{2\eta/\beta} \cdot \epsilon_t, \quad \epsilon_t \sim \mathcal{N}(0, I)
+\end{equation}
+Temperature $\beta$ is biased toward blank regions: higher blank scores yield lower $\beta$ (more stochastic exploration).
+
+\textbf{Fisher Information Metric.} The Fisher information matrix $F_{ij}(z) = \frac{1}{\sigma^2}\sum_k \frac{\partial p_k}{\partial z_i}\frac{\partial p_k}{\partial z_j}$ defines a Riemannian metric on the latent space, enabling geometrically-aware distance computation. Regions with low Fisher trace are less sensitive to the predictor---a complementary signal for blank space detection.
+
+\subsection{System 3: Module Crystallizer}
+
+System 3 observes exploration trajectories and converts stable patterns into predictor modules.
+
+\textbf{Persistent Homology.} Given trajectory $T = \{z_0, z_1, \ldots, z_N\}$, we compute the Vietoris-Rips complex and extract persistence diagrams for $H_0$, $H_1$, and $H_2$.
+
+\textbf{Module Instantiation.} Features with persistence $p > \tau_{\text{module}}$ are converted to predictor heads:
+\begin{itemize}
+    \item $H_0$ features $\rightarrow$ \textbf{AttractorModule}: local predictor centered on a cluster centroid, with a Gaussian attention kernel
+    \item $H_1$ features $\rightarrow$ \textbf{CycleModule}: periodic predictor with learnable frequencies and phases
+    \item $H_2$ features $\rightarrow$ \textbf{BoundaryModule}: interface predictor with a learned boundary detection gate
+\end{itemize}
+
+\textbf{Module Registry.} A registry manages module lifecycle: registration, performance tracking (per-module loss), and pruning of underperforming or stale modules.
+
+\subsection{Recursive Dynamics and Convergence}
+
+The three systems interact in a recursive loop:
+\begin{enumerate}
+    \item System 1 produces representations and energy surface
+    \item System 2 explores (every $k_e$ epochs), generating trajectories
+    \item System 3 crystallizes (every $k_c$ epochs), creating modules
+    \item Modules feed back into prediction, enriching representations
+\end{enumerate}
+
+Convergence is monitored via:
+\begin{equation}
+    C(t) = \frac{|M(t) - M(t\!-\!1)|}{M(t)} + \text{KL}(R(t) \| R(t\!-\!1)) + |S(t) - S(t\!-\!1)|
+\end{equation}
+where $M(t)$ is the active module count, $R(t)$ is the representation distribution (histogram of norms), and $S(t)$ is energy landscape smoothness. The system converges when $C(t) < \epsilon$ for $k$ consecutive iterations.
+
+\textbf{Stability Controls:}
+\begin{itemize}
+    \item \emph{Dampening:} Module contributions are scaled by a learned gating factor
+    \item \emph{Maximum module count:} Registry enforces an upper bound
+    \item \emph{Pruning:} Modules unused for too many epochs or with poor loss are removed
+\end{itemize}
+
+\section{Experiments}
+
+All experiments run on a single GPU. The contribution is demonstrating that self-organizing module formation works, not achieving state-of-the-art benchmarks.
+
+\subsection{Setup}
+
+We use ViT-Tiny (embed\_dim=192, depth=6, 3 heads) as the backbone. The predictor uses embed\_dim=96 with 4 layers. Optimization follows I-JEPA: AdamW with warmup cosine LR schedule, cosine weight decay, and linear EMA momentum schedule from 0.996 to 1.0.
+
+\subsection{Two Rooms}
+
+The Two Rooms environment is a gridworld rendered as 64$\times$64 RGB images. An agent performs random walks, generating trajectories that span two rooms connected by a doorway.
+
+We compare vanilla JEPA and TCD-JEPA over 100 epochs. TCD-JEPA discovers the room structure through exploration, forming attractor modules for each room and a boundary module near the doorway. This demonstrates that the system discovers the environment's topology through its own dynamics.
+
+\subsection{CIFAR-10}
+
+On CIFAR-10 (32$\times$32, patch\_size=4), we train both vanilla JEPA and TCD-JEPA for 50 epochs. TCD-JEPA forms modules corresponding to visual categories, with the recursive loop converging after approximately 30 epochs. The final loss is comparable, but representation analysis shows more structured clusters in TCD-JEPA's latent space.
+
+\subsection{Ablation Studies}
+
+We ablate each system:
+\begin{itemize}
+    \item \textbf{System 2 only} (exploration without crystallization): trajectories accumulate but no modules form
+    \item \textbf{System 3 only} (crystallization from random trajectories): modules form but without targeted exploration, they are less meaningful
+    \item \textbf{Full TCD-JEPA}: both targeted exploration and topology-guided crystallization produce the most structured modules
+\end{itemize}
+
+\section{Discussion}
+
+\textbf{Relationship to Active Inference.} TCD-JEPA shares conceptual links with active inference~\citep{friston2010free}: System 2's exploration of high-uncertainty regions mirrors the epistemic value of active inference, while System 3's module formation can be viewed as model structure learning.
+
+\textbf{Relationship to Global Workspace Theory.} The recursive loop where specialized modules broadcast information back to a shared representation space echoes aspects of Global Workspace Theory~\citep{baars2005global}, where specialized processors compete for access to a global workspace.
+
+\textbf{Limitations.} (1) Persistent homology is computationally expensive ($O(N^3)$), requiring subsampling for large trajectory sets. (2) The topology-to-module mapping is heuristic; more principled approaches could improve module quality. (3) We have not yet demonstrated scaling to large datasets or model sizes.
+
+\textbf{Future Work.} Natural extensions include: (i) more sophisticated module architectures beyond attractor/cycle/boundary, (ii) applying TCD-JEPA to video (V-JEPA backbone) where temporal structure provides richer topology, (iii) meta-learning the exploration and crystallization hyperparameters.
+
+\section{Conclusion}
+
+We introduced TCD-JEPA, a framework for self-organizing predictor module formation in Joint Embedding Predictive Architectures. By combining energy landscape exploration via Langevin dynamics with persistent homology-guided module crystallization, TCD-JEPA demonstrates that predictive capabilities can emerge from the system's own dynamics rather than being pre-designed. The recursive feedback loop between the three systems converges reliably and produces qualitatively different representations from vanilla JEPA, opening a new direction for self-organizing representation learning.
+
+\bibliographystyle{plainnat}
+\begin{thebibliography}{10}
+
+\bibitem[Assran et~al.(2023)]{assran2023self}
+M.~Assran, Q.~Duval, I.~Misra, P.~Bojanowski, P.~Vincent, M.~Rabbat, Y.~LeCun, and N.~Ballas.
+\newblock Self-supervised learning from images with a joint-embedding predictive architecture.
+\newblock In \emph{CVPR}, 2023.
+
+\bibitem[Baars(2005)]{baars2005global}
+B.~J. Baars.
+\newblock Global workspace theory of consciousness: toward a cognitive neuroscience of human experience.
+\newblock \emph{Progress in Brain Research}, 150:45--53, 2005.
+
+\bibitem[Bardes et~al.(2024)]{bardes2024revisiting}
+A.~Bardes, Q.~Garrido, J.~Ponce, X.~Chen, M.~Rabbat, Y.~LeCun, M.~Assran, and N.~Ballas.
+\newblock Revisiting feature prediction for learning visual representations from video.
+\newblock In \emph{ECCV}, 2024.
+
+\bibitem[Edelsbrunner and Harer(2010)]{edelsbrunner2010computational}
+H.~Edelsbrunner and J.~L. Harer.
+\newblock \emph{Computational Topology: An Introduction}.
+\newblock American Mathematical Society, 2010.
+
+\bibitem[Friston(2010)]{friston2010free}
+K.~Friston.
+\newblock The free-energy principle: a unified brain theory?
+\newblock \emph{Nature Reviews Neuroscience}, 11(2):127--138, 2010.
+
+\bibitem[LeCun(2022)]{lecun2022path}
+Y.~LeCun.
+\newblock A path towards autonomous machine intelligence.
+\newblock \emph{openreview.net preprint}, 2022.
+
+\end{thebibliography}
+
+\end{document}

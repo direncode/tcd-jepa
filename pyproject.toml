@@ -31,6 +31,7 @@ dependencies = [
     "pyyaml",
     "einops",
     "tqdm",
+    "Pillow",
 ]
 
 [project.optional-dependencies]
@@ -40,11 +41,14 @@ dev = ["pytest", "black", "ruff"]
 all = ["giotto-tda", "omegaconf", "wandb"]
 
 [tool.setuptools.packages.find]
-include = ["tcd_jepa*"]
+include = ["tcd_jepa*", "experiments*"]
 
 [tool.black]
 line-length = 100
 target-version = ["py39"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
