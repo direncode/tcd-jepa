@@ -1,0 +1,17 @@
+{
+  "vanilla": {
+    "final_loss": 0.005383565131088962,
+    "desc": "Vanilla JEPA",
+    "modules": 0
+  },
+  "sys2_only": {
+    "final_loss": 0.004932782207818135,
+    "desc": "JEPA + System 2 (explore only)",
+    "modules": 0
+  },
+  "full_tcd": {
+    "final_loss": 0.002111095661783348,
+    "desc": "Full TCD-JEPA (1+2+3)",
+    "modules": 8
+  }
+}
