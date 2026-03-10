@@ -57,6 +57,7 @@ class Trainer:
         self.recursive_loop = recursive_loop
         self.stream_encoder = stream_encoder
         self.global_step = 0
+        self._known_module_ids: set[str] = set()
 
     def train(self, num_epochs: int, start_epoch: int = 0) -> None:
         """Run the training loop."""
@@ -89,6 +90,8 @@ class Trainer:
                 if loop_result.get("crystallized"):
                     n_mods = loop_result["crystallization"]["num_active_modules"]
                     logger.info(f"  Recursive loop: {n_mods} active modules")
+                    # Add new module parameters to optimizer
+                    self._register_new_module_params()
 
             epoch_time = time.time() - t0
             metrics_dict = epoch_metrics.to_dict()
@@ -122,6 +125,30 @@ class Trainer:
                     optimizer=self.optimizer,
                     scaler=self.scaler,
                 )
+
+    def _register_new_module_params(self) -> None:
+        """Add newly crystallized module parameters to the optimizer."""
+        if self.recursive_loop is None:
+            return
+        registry = self.recursive_loop.crystallizer.registry
+        new_params = []
+        for module_id, module in registry.get_all_modules():
+            if module_id not in self._known_module_ids:
+                self._known_module_ids.add(module_id)
+                params = list(module.parameters())
+                if params:
+                    new_params.extend(params)
+                    module.to(self.device)
+
+        if new_params:
+            # Add as a new param group with reduced learning rate
+            current_lr = self.optimizer.param_groups[0]["lr"]
+            self.optimizer.add_param_group({
+                "params": new_params,
+                "lr": current_lr,
+                "weight_decay": 0.0,
+            })
+            logger.info(f"  Added {len(new_params)} new module params to optimizer")
 
     def _train_step(
         self,

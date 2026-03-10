@@ -237,6 +237,7 @@ def _train_model_tcd(model, dataloader, train_cfg, device, recursive_loop) -> tu
     epoch_losses = []
     module_counts = []
     convergence_scores = []
+    known_module_ids: set[str] = set()
 
     for epoch in range(num_epochs):
         total_loss = 0.0
@@ -271,6 +272,17 @@ def _train_model_tcd(model, dataloader, train_cfg, device, recursive_loop) -> tu
 
         energy_fn = stream_encoder.make_energy_fn(target_repr)
         loop_result = recursive_loop.step(z_context, energy_fn, epoch=epoch)
+
+        # Add new module params to optimizer
+        if loop_result.get("crystallized"):
+            registry = recursive_loop.crystallizer.registry
+            for mid, mod in registry.get_all_modules():
+                if mid not in known_module_ids:
+                    known_module_ids.add(mid)
+                    params = list(mod.parameters())
+                    if params:
+                        mod.to(device)
+                        optimizer.add_param_group({"params": params, "lr": optimizer.param_groups[0]["lr"], "weight_decay": 0.0})
 
         module_counts.append(recursive_loop.num_modules)
         if "convergence" in loop_result:

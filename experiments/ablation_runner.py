@@ -160,6 +160,7 @@ def _run_single_ablation(name, ablation_cfg, cfg, dataloader, device):
     model.train()
     epoch_losses = []
     module_counts = []
+    known_module_ids: set[str] = set()
 
     for epoch in range(num_epochs):
         total, count = 0.0, 0
@@ -190,8 +191,19 @@ def _run_single_ablation(name, ablation_cfg, cfg, dataloader, device):
                 z = model.context_encoder(last_images)
                 t = model.target_encoder(last_images)
             energy_fn = stream_encoder.make_energy_fn(t)
-            recursive_loop.step(z, energy_fn, epoch=epoch)
+            loop_result = recursive_loop.step(z, energy_fn, epoch=epoch)
             n_mods = recursive_loop.num_modules
+
+            # Add new module params to optimizer
+            if loop_result.get("crystallized"):
+                registry = recursive_loop.crystallizer.registry
+                for mid, mod in registry.get_all_modules():
+                    if mid not in known_module_ids:
+                        known_module_ids.add(mid)
+                        params = list(mod.parameters())
+                        if params:
+                            mod.to(device)
+                            optimizer.add_param_group({"params": params, "lr": optimizer.param_groups[0]["lr"], "weight_decay": 0.0})
 
         module_counts.append(n_mods)
         logger.info(f"  [{name}] Epoch {epoch}: loss={avg:.4f} modules={n_mods}")
