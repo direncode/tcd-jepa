@@ -29,7 +29,7 @@ class DynamicPredictor(nn.Module):
         self,
         base_predictor: nn.Module,
         embed_dim: int,
-        module_weight: float = 0.3,
+        module_weight: float = 0.05,
         registry: Optional[ModuleRegistry] = None,
     ) -> None:
         super().__init__()
@@ -37,7 +37,8 @@ class DynamicPredictor(nn.Module):
         self.embed_dim = embed_dim
         self.registry = registry or ModuleRegistry()
 
-        # Learnable mixing coefficient (initialized via sigmoid inverse)
+        # Learnable mixing coefficient — start very small so new modules
+        # don't immediately corrupt predictions
         init_logit = torch.log(torch.tensor(module_weight / (1.0 - module_weight + 1e-8)))
         self.module_logit = nn.Parameter(init_logit)
 

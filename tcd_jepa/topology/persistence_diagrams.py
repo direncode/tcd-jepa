@@ -20,7 +20,7 @@ class PersistenceDiagramAnalyzer:
         persistence_threshold: float = 0.3,
         relative_threshold: bool = True,
         min_features: int = 0,
-        max_features: int = 5,
+        max_features: int = 2,
     ) -> None:
         self.persistence_threshold = persistence_threshold
         self.relative_threshold = relative_threshold

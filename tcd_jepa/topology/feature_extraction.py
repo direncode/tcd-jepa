@@ -66,6 +66,10 @@ class TopologicalFeatureExtractor:
                 birth, death = dgm[i]
                 persistence = death - birth
 
+                # Skip low-persistence features
+                if persistence < self.persistence_threshold:
+                    continue
+
                 module_type = {0: "attractor", 1: "cycle", 2: "boundary"}[dim]
 
                 feat = TopologicalFeature(
