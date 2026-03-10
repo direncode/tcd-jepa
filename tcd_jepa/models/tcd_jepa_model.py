@@ -38,7 +38,6 @@ class TCDJEPAModel(nn.Module):
             self.predictor = DynamicPredictor(
                 base_predictor=predictor,
                 embed_dim=embed_dim,
-                module_weight=0.1,
             )
             self._has_dynamic_predictor = True
         else:

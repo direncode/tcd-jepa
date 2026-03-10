@@ -1,4 +1,6 @@
-# Config for Two Rooms environment experiments
+# Config for Multi-Room environment experiments
+# Prediction task is deliberately harder: large prediction masks
+# force the model to reconstruct most of the image from a small context.
 model:
   encoder:
     img_size: 64
@@ -17,31 +19,31 @@ model:
     end: 1.0
 
 training:
-  epochs: 100
+  epochs: 50
   batch_size: 64
   learning_rate: 0.001
   start_lr: 0.0001
   final_lr: 0.0
   weight_decay: 0.05
   final_weight_decay: 0.05
-  warmup_epochs: 10
+  warmup_epochs: 5
   optimizer: adamw
   use_bfloat16: false
-  checkpoint_freq: 20
+  checkpoint_freq: 10
   seed: 42
 
 data:
   dataset: two_rooms
   img_size: 64
-  num_workers: 2
+  num_workers: 0
   data_dir: ./data
 
 masking:
-  num_enc_masks: 4
+  num_enc_masks: 1
   num_pred_masks: 1
   min_keep: 4
-  enc_mask_scale: [0.15, 0.2]
-  pred_mask_scale: [0.2, 0.4]
+  enc_mask_scale: [0.5, 0.8]
+  pred_mask_scale: [0.3, 0.6]
   aspect_ratio: [0.75, 1.5]
 
 logging:
