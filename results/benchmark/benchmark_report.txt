@@ -1,0 +1,59 @@
+================================================================================
+TCD-JEPA vs HYPERSCALER BENCHMARK COMPARISON
+Dataset: Two Rooms (64x64) | Model: ViT embed_dim=96, depth=4
+Protocol: Frozen encoder → Linear probe / k-NN (same as I-JEPA, DINO, etc.)
+================================================================================
+
+Vanilla JEPA (2 seeds, 20 epochs):
+  Room Classification (Linear Probe): 57.93% +/- 15.73%
+  Room Classification (k-NN k=1):    24.33% +/- 1.07%
+  Room Classification (k-NN k=5):    26.13% +/- 1.80%
+  Room Classification (k-NN k=20):    24.17% +/- 0.50%
+  Effective Rank:                     5.7 +/- 2.0
+  Uniformity (lower=better):          -0.0000 +/- 0.0000
+  Feature Diversity (std):            0.0001 +/- 0.0000
+  Training Time:                      314.1s +/- 27.3s
+
+TCD-JEPA (2 seeds, 20 epochs):
+  Room Classification (Linear Probe): 57.73% +/- 7.60%
+  Room Classification (k-NN k=1):    29.93% +/- 0.87%
+  Room Classification (k-NN k=5):    29.73% +/- 2.60%
+  Room Classification (k-NN k=20):    34.40% +/- 0.00%
+  Effective Rank:                     4.1 +/- 1.6
+  Uniformity (lower=better):          -0.0000 +/- 0.0000
+  Feature Diversity (std):            0.0001 +/- 0.0000
+  Training Time:                      330.8s +/- 2.2s
+  Crystallized Modules:               6.0 +/- 0.0
+
+────────────────────────────────────────────────────────────────────────────────
+IMPROVEMENT (TCD-JEPA over Vanilla JEPA):
+  Linear Probe                  : -0.20 (-0.3% relative)
+  k-NN (k=20)                   : +10.23 (+42.3% relative)
+  Effective Rank                : -1.67 (-29.2% relative)
+
+────────────────────────────────────────────────────────────────────────────────
+PUBLISHED SSL BENCHMARKS (for context — different datasets & scales):
+────────────────────────────────────────────────────────────────────────────────
+Method                         Arch                 Dataset          Lin Probe
+────────────────────────────── ──────────────────── ─────────────── ──────────
+I-JEPA (Meta)                  ViT-H/16-448         ImageNet-1k          77.3%
+I-JEPA (Meta)                  ViT-B/16             ImageNet-1k          72.9%
+MAE (Meta)                     ViT-L/16             ImageNet-1k          75.8%
+DINO (Meta)                    ViT-B/8              ImageNet-1k          80.1%
+DINOv2 (Meta)                  ViT-g/14             ImageNet-1k          86.5%
+iBOT (ByteDance)               ViT-L/16             ImageNet-1k          81.7%
+data2vec (Meta)                ViT-L/16             ImageNet-1k          76.3%
+SimCLR (Google)                ResNet-50            CIFAR-10              ~91%
+BYOL (DeepMind)                ResNet-50            CIFAR-10              ~92%
+Vanilla JEPA (ours)            ViT-S (custom)       Two Rooms            57.9%
+TCD-JEPA (ours)                ViT-S (custom)       Two Rooms            57.7%
+
+────────────────────────────────────────────────────────────────────────────────
+NOTES:
+- Published numbers use ImageNet-1k (1.28M images, 224x224, 1000 classes)
+- Our evaluation uses Two Rooms (10k observations, 64x64, 4 rooms)
+- The evaluation PROTOCOL is identical: frozen encoder → linear probe
+- Direct accuracy comparison is apples-to-oranges due to different tasks
+- What matters: TCD-JEPA improvement over vanilla JEPA baseline
+- TCD adds topological module discovery at modest compute overhead
+────────────────────────────────────────────────────────────────────────────────
