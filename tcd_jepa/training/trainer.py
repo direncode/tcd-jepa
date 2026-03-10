@@ -39,6 +39,8 @@ class Trainer:
         metric_logger: Optional[MetricLogger] = None,
         checkpoint_dir: str = "checkpoints",
         scaler: Optional[torch.amp.GradScaler] = None,
+        recursive_loop=None,
+        stream_encoder=None,
     ):
         self.model = model
         self.optimizer = optimizer
@@ -52,6 +54,8 @@ class Trainer:
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.scaler = scaler
+        self.recursive_loop = recursive_loop
+        self.stream_encoder = stream_encoder
         self.global_step = 0
 
     def train(self, num_epochs: int, start_epoch: int = 0) -> None:
@@ -75,14 +79,32 @@ class Trainer:
                 )
                 self.global_step += 1
 
+            # Run recursive loop at end of epoch if enabled
+            if self.recursive_loop is not None and self.stream_encoder is not None:
+                with torch.no_grad():
+                    z = self.model.context_encoder(images.to(self.device))
+                    t = self.model.target_encoder(images.to(self.device))
+                energy_fn = self.stream_encoder.make_energy_fn(t)
+                loop_result = self.recursive_loop.step(z, energy_fn, epoch=epoch)
+                if loop_result.get("crystallized"):
+                    n_mods = loop_result["crystallization"]["num_active_modules"]
+                    logger.info(f"  Recursive loop: {n_mods} active modules")
+
             epoch_time = time.time() - t0
             metrics_dict = epoch_metrics.to_dict()
             metrics_dict["epoch"] = epoch
             metrics_dict["epoch_time"] = epoch_time
 
+            # Add recursive loop metrics
+            if self.recursive_loop is not None:
+                metrics_dict["num_modules"] = self.recursive_loop.num_modules
+                metrics_dict["converged"] = self.recursive_loop.is_converged
+
             logger.info(
                 f"Epoch {epoch}: loss={metrics_dict['loss']:.4f} "
                 f"lr={metrics_dict['lr']:.6f} time={epoch_time:.1f}s"
+                + (f" modules={self.recursive_loop.num_modules}"
+                   if self.recursive_loop else "")
             )
 
             if self.metric_logger is not None:

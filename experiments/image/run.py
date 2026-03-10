@@ -87,7 +87,7 @@ def run_experiment(config_path: str, overrides: list[str] = None) -> dict:
         drop_last=True,
     )
 
-    def build_model():
+    def build_model(use_dynamic=False):
         return build_tcd_jepa(
             img_size=img_size,
             patch_size=patch_size,
@@ -97,6 +97,7 @@ def run_experiment(config_path: str, overrides: list[str] = None) -> dict:
             predictor_embed_dim=pred_cfg["predictor_embed_dim"],
             predictor_depth=pred_cfg["predictor_depth"],
             predictor_num_heads=pred_cfg["num_heads"],
+            use_dynamic_predictor=use_dynamic,
         ).to(device)
 
     # Vanilla JEPA
@@ -105,7 +106,7 @@ def run_experiment(config_path: str, overrides: list[str] = None) -> dict:
 
     # TCD-JEPA
     logger.info("=== TCD-JEPA ===")
-    tcd_model = build_model()
+    tcd_model = build_model(use_dynamic=True)
     recursive_loop = RecursiveLoop(
         embed_dim=enc_cfg["embed_dim"],
         explore_every=2,
@@ -113,6 +114,8 @@ def run_experiment(config_path: str, overrides: list[str] = None) -> dict:
         langevin_steps=20,
         device=device,
     )
+    # Share crystallizer registry with dynamic predictor
+    tcd_model.set_module_registry(recursive_loop.crystallizer.registry)
     tcd_losses, module_counts, conv_scores = _train_tcd(
         tcd_model, dataloader, train_cfg, device, recursive_loop
     )

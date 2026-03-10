@@ -156,8 +156,8 @@ class RecursiveLoop:
         langevin_steps: int = 50,
         langevin_step_size: float = 0.01,
         langevin_temperature: float = 1.0,
-        persistence_threshold: float = 0.1,
-        max_modules: int = 20,
+        persistence_threshold: float = 0.3,
+        max_modules: int = 10,
         device: torch.device = torch.device("cpu"),
     ) -> None:
         self.embed_dim = embed_dim
@@ -231,6 +231,12 @@ class RecursiveLoop:
                 "total_persistence": crystal_result["total_persistence"],
                 "num_active_modules": self.crystallizer.num_modules,
             }
+            # Expose new module objects so the caller can register them with the model
+            result["new_module_objects"] = [
+                (mid, self.crystallizer.registry.get_module(mid), feat)
+                for mid, feat in crystal_result["new_modules"]
+                if self.crystallizer.registry.get_module(mid) is not None
+            ]
             result["crystallized"] = True
 
         # Convergence monitoring

@@ -108,6 +108,7 @@ def run_experiment(config_path: str, overrides: list[str] = None) -> dict:
         predictor_embed_dim=pred_cfg["predictor_embed_dim"],
         predictor_depth=pred_cfg["predictor_depth"],
         predictor_num_heads=pred_cfg["num_heads"],
+        use_dynamic_predictor=True,
     ).to(device)
 
     recursive_loop = RecursiveLoop(
@@ -117,6 +118,9 @@ def run_experiment(config_path: str, overrides: list[str] = None) -> dict:
         langevin_steps=20,
         device=device,
     )
+
+    # Share crystallizer registry with dynamic predictor
+    tcd_model.set_module_registry(recursive_loop.crystallizer.registry)
 
     tcd_losses, module_counts, convergence_scores = _train_model_tcd(
         tcd_model, dataloader, train_cfg, device, recursive_loop

@@ -25,6 +25,13 @@ def _check_matplotlib():
     return _MPL_AVAILABLE
 
 
+def _pca_2d(data: np.ndarray) -> np.ndarray:
+    """Project data to 2D using SVD (no sklearn dependency)."""
+    centered = data - data.mean(axis=0)
+    U, S, Vt = np.linalg.svd(centered, full_matrices=False)
+    return centered @ Vt[:2].T
+
+
 def plot_energy_heatmap(
     z_grid: torch.Tensor,
     energies: torch.Tensor,
@@ -44,15 +51,13 @@ def plot_energy_heatmap(
     if not _check_matplotlib():
         return
     import matplotlib.pyplot as plt
-    from sklearn.decomposition import PCA
 
     points = z_grid.detach().cpu().numpy()
     e = energies.detach().cpu().numpy()
 
     # Project to 2D if needed
     if points.shape[1] > 2:
-        pca = PCA(n_components=2)
-        points_2d = pca.fit_transform(points)
+        points_2d = _pca_2d(points)
     else:
         points_2d = points
 
@@ -98,9 +103,7 @@ def plot_trajectory(
 
     # Project to 2D
     if D > 2:
-        from sklearn.decomposition import PCA
-        pca = PCA(n_components=2)
-        traj_2d = pca.fit_transform(traj)
+        traj_2d = _pca_2d(traj)
     else:
         traj_2d = traj
 

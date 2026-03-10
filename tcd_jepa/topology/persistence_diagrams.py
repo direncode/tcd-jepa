@@ -17,10 +17,10 @@ class PersistenceDiagramAnalyzer:
 
     def __init__(
         self,
-        persistence_threshold: float = 0.1,
+        persistence_threshold: float = 0.3,
         relative_threshold: bool = True,
-        min_features: int = 1,
-        max_features: int = 10,
+        min_features: int = 0,
+        max_features: int = 5,
     ) -> None:
         self.persistence_threshold = persistence_threshold
         self.relative_threshold = relative_threshold

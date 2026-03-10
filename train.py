@@ -118,6 +118,7 @@ def main():
         predictor_embed_dim=pred_cfg["predictor_embed_dim"],
         predictor_depth=pred_cfg["predictor_depth"],
         predictor_num_heads=pred_cfg["num_heads"],
+        use_dynamic_predictor=args.tcd,
     ).to(device)
 
     param_count = sum(p.numel() for p in model.parameters())
@@ -169,6 +170,7 @@ def main():
 
     # Optional TCD recursive loop
     recursive_loop = None
+    stream_encoder = None
     if args.tcd:
         recursive_loop = RecursiveLoop(
             embed_dim=enc_cfg["embed_dim"],
@@ -178,6 +180,8 @@ def main():
             device=device,
         )
         stream_encoder = StreamEncoder(model.context_encoder, model.target_encoder)
+        # Share crystallizer's registry with the dynamic predictor
+        model.set_module_registry(recursive_loop.crystallizer.registry)
         logger.info("TCD recursive loop enabled")
 
     # Scaler for mixed precision
@@ -198,6 +202,8 @@ def main():
         metric_logger=metric_logger,
         checkpoint_dir=str(Path(log_dir) / "checkpoints"),
         scaler=scaler,
+        recursive_loop=recursive_loop,
+        stream_encoder=stream_encoder,
     )
 
     logger.info(f"Starting training for {num_epochs} epochs")

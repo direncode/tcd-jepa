@@ -33,7 +33,7 @@ class TopologicalFeatureExtractor:
 
     def __init__(
         self,
-        persistence_threshold: float = 0.1,
+        persistence_threshold: float = 0.3,
         min_cluster_size: int = 5,
     ) -> None:
         self.persistence_threshold = persistence_threshold

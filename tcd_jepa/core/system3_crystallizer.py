@@ -32,9 +32,9 @@ class ModuleCrystallizer:
     def __init__(
         self,
         embed_dim: int,
-        persistence_threshold: float = 0.1,
+        persistence_threshold: float = 0.3,
         max_homology_dim: int = 2,
-        max_modules: int = 20,
+        max_modules: int = 10,
         max_points_for_ph: int = 500,
         device: torch.device = torch.device("cpu"),
     ) -> None:

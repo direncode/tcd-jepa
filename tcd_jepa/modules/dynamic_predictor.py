@@ -24,12 +24,13 @@ class DynamicPredictor(nn.Module):
         base_predictor: nn.Module,
         embed_dim: int,
         module_weight: float = 0.1,
+        registry: Optional[ModuleRegistry] = None,
     ) -> None:
         super().__init__()
         self.base_predictor = base_predictor
         self.embed_dim = embed_dim
         self.module_weight = module_weight
-        self.registry = ModuleRegistry()
+        self.registry = registry or ModuleRegistry()
 
         # Gate that learns to weight module contributions
         self.module_gate = nn.Sequential(

@@ -17,8 +17,8 @@ from tcd_jepa.utils.tensors import apply_masks
 class TCDJEPAModel(nn.Module):
     """TCD-JEPA model combining context encoder, target encoder, and predictor.
 
-    In Phase 1, this is a standard JEPA model. Systems 2 and 3 will be
-    integrated in later phases.
+    When use_dynamic_predictor=True, wraps the base predictor in a
+    DynamicPredictor that incorporates crystallized modules from System 3.
     """
 
     def __init__(
@@ -26,11 +26,24 @@ class TCDJEPAModel(nn.Module):
         context_encoder: ContextEncoder,
         target_encoder: TargetEncoder,
         predictor: VisionTransformerPredictor,
+        use_dynamic_predictor: bool = False,
+        embed_dim: int = 192,
     ):
         super().__init__()
         self.context_encoder = context_encoder
         self.target_encoder = target_encoder
-        self.predictor = predictor
+
+        if use_dynamic_predictor:
+            from tcd_jepa.modules.dynamic_predictor import DynamicPredictor
+            self.predictor = DynamicPredictor(
+                base_predictor=predictor,
+                embed_dim=embed_dim,
+                module_weight=0.1,
+            )
+            self._has_dynamic_predictor = True
+        else:
+            self.predictor = predictor
+            self._has_dynamic_predictor = False
 
     def forward(
         self,
@@ -74,6 +87,15 @@ class TCDJEPAModel(nn.Module):
         """Update target encoder via EMA."""
         self.target_encoder.update_ema(self.context_encoder, momentum)
 
+    def set_module_registry(self, registry) -> None:
+        """Share a ModuleRegistry with the dynamic predictor.
+
+        Call this to connect the crystallizer's registry so that modules
+        created by System 3 are automatically used by the predictor.
+        """
+        if self._has_dynamic_predictor:
+            self.predictor.registry = registry
+
 
 def build_tcd_jepa(
     img_size: int = 224,
@@ -86,6 +108,7 @@ def build_tcd_jepa(
     predictor_embed_dim: int = 192,
     predictor_depth: int = 6,
     predictor_num_heads: int = 6,
+    use_dynamic_predictor: bool = False,
 ) -> TCDJEPAModel:
     """Build a TCD-JEPA model from hyperparameters.
 
@@ -138,4 +161,8 @@ def build_tcd_jepa(
         norm_layer=norm_layer,
     )
 
-    return TCDJEPAModel(context_encoder, target_encoder, predictor)
+    return TCDJEPAModel(
+        context_encoder, target_encoder, predictor,
+        use_dynamic_predictor=use_dynamic_predictor,
+        embed_dim=embed_dim,
+    )

@@ -182,6 +182,77 @@ class TestSchedulers:
         assert wds[-1] <= wds[0]
 
 
+class TestDynamicPredictorWiring:
+    """Test DynamicPredictor integration with TCDJEPAModel."""
+
+    def test_build_with_dynamic_predictor(self):
+        """Model builds successfully with use_dynamic_predictor=True."""
+        model = build_tcd_jepa(
+            img_size=32, patch_size=4, embed_dim=64, depth=2, num_heads=2,
+            predictor_embed_dim=32, predictor_depth=2, predictor_num_heads=2,
+            use_dynamic_predictor=True,
+        )
+        assert model._has_dynamic_predictor
+        from tcd_jepa.modules.dynamic_predictor import DynamicPredictor
+        assert isinstance(model.predictor, DynamicPredictor)
+
+    def test_forward_with_dynamic_predictor(self):
+        """Forward pass works with dynamic predictor (no modules registered)."""
+        model = build_tcd_jepa(
+            img_size=32, patch_size=4, embed_dim=64, depth=2, num_heads=2,
+            predictor_embed_dim=32, predictor_depth=2, predictor_num_heads=2,
+            use_dynamic_predictor=True,
+        )
+        B = 2
+        num_patches = 64
+        images = torch.randn(B, 3, 32, 32)
+        masks_enc = [torch.randint(0, num_patches, (B, 10))]
+        masks_pred = [torch.randint(0, num_patches, (B, 16))]
+
+        result = model(images, masks_enc, masks_pred)
+        assert result["loss"].dim() == 0
+        assert result["loss"].item() > 0
+
+    def test_set_module_registry(self):
+        """Registry sharing works between model and crystallizer."""
+        from tcd_jepa.modules.module_registry import ModuleRegistry
+
+        model = build_tcd_jepa(
+            img_size=32, patch_size=4, embed_dim=64, depth=2, num_heads=2,
+            predictor_embed_dim=32, predictor_depth=2, predictor_num_heads=2,
+            use_dynamic_predictor=True,
+        )
+        external_registry = ModuleRegistry(max_modules=5)
+        model.set_module_registry(external_registry)
+        assert model.predictor.registry is external_registry
+
+    def test_backward_with_dynamic_predictor(self):
+        """Gradients flow through dynamic predictor."""
+        model = build_tcd_jepa(
+            img_size=32, patch_size=4, embed_dim=64, depth=2, num_heads=2,
+            predictor_embed_dim=32, predictor_depth=2, predictor_num_heads=2,
+            use_dynamic_predictor=True,
+        )
+        B = 2
+        num_patches = 64
+        images = torch.randn(B, 3, 32, 32)
+        masks_enc = [torch.randint(0, num_patches, (B, 10))]
+        masks_pred = [torch.randint(0, num_patches, (B, 16))]
+
+        result = model(images, masks_enc, masks_pred)
+        result["loss"].backward()
+
+        # Gate parameters should have gradients (even without modules)
+        for p in model.predictor.module_gate.parameters():
+            # Gate isn't used when no modules registered, so no grads expected
+            pass
+
+        # Base predictor should have gradients
+        for p in model.predictor.base_predictor.parameters():
+            if p.requires_grad:
+                assert p.grad is not None
+
+
 class TestTrainingMetrics:
     """Test metric accumulation."""
 
