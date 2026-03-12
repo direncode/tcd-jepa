@@ -266,6 +266,25 @@ class NLIntelligencePipeline:
             pad = prediction_errors.mean().expand(N_corpus - len(prediction_errors))
             prediction_errors = torch.cat([prediction_errors, pad])
 
+        # 3b. Harvest deep architectural signals
+        deep_profile = None
+        deep_signals_cfg = self.cfg.get("deep_signals", {})
+        if deep_signals_cfg.get("enabled", use_tcd) and self.recursive_loop is not None:
+            logger.info("Step 3b: Harvesting deep architectural signals...")
+            from tcd_jepa.manifold.deep_signals import DeepSignalHarvester
+            harvester = DeepSignalHarvester(
+                blank_detection_samples=deep_signals_cfg.get("blank_detection_samples", 200),
+                fisher_samples=deep_signals_cfg.get("fisher_samples", 100),
+                attention_extraction=deep_signals_cfg.get("attention_extraction", True),
+            )
+            deep_profile = harvester.harvest(
+                model=self.model,
+                dataset=dataset,
+                corpus=self.corpus,
+                recursive_loop=self.recursive_loop,
+                device=self.device,
+            )
+
         # 4. Generate insights
         logger.info("Step 4: Generating intelligence report...")
         report = self.insight_engine.generate_report(
@@ -278,6 +297,7 @@ class NLIntelligencePipeline:
             prediction_errors=prediction_errors,
             recursive_loop=self.recursive_loop,
             lineage_graph=self.corpus.lineage_graph,
+            deep_signal_profile=deep_profile,
         )
 
         elapsed = time.time() - t0

@@ -73,6 +73,13 @@ insight:
   opportunity_sim_threshold: 0.7  # cross-topic similarity threshold
   risk_boundary_ratio: 0.7     # distance ratio for boundary detection
 
+# Deep signal harvesting (alien-grade intelligence)
+deep_signals:
+  enabled: true                    # harvest deep architectural signals after training
+  blank_detection_samples: 200     # samples for blank space detection
+  fisher_samples: 100              # samples for Fisher information computation
+  attention_extraction: true       # extract attention patterns via hooks
+
 # Lineage tracking
 lineage:
   enabled: true                  # track provenance for every artifact

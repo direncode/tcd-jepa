@@ -184,7 +184,14 @@ class InsightReport:
         lines.append("")
 
         # Insights by category
-        categories = ["strategic", "cluster", "opportunity", "risk", "trend", "relationship", "anomaly"]
+        categories = [
+            "strategic", "cluster", "opportunity", "risk", "trend", "relationship", "anomaly",
+            "knowledge_gap", "feedback_loop", "hierarchy", "topological_stability",
+            "causal_chain", "information_bottleneck", "intervention",
+            "blind_spot", "confidence_field", "coverage_gap",
+            "topic_drift", "phase_transition", "exploration_dynamics",
+            "model_quality", "insight_reliability", "corpus_diagnosis",
+        ]
         category_titles = {
             "strategic": "STRATEGIC INSIGHTS",
             "cluster": "TOPIC DISCOVERY",
@@ -193,6 +200,22 @@ class InsightReport:
             "trend": "TRENDS & DYNAMICS",
             "relationship": "KEY RELATIONSHIPS",
             "anomaly": "ANOMALIES & NOVELTY",
+            "knowledge_gap": "KNOWLEDGE GAPS (Topological Voids)",
+            "feedback_loop": "FEEDBACK LOOPS (Topological Cycles)",
+            "hierarchy": "TOPIC HIERARCHY (Multi-Scale Structure)",
+            "topological_stability": "TOPOLOGICAL STABILITY",
+            "causal_chain": "CAUSAL CHAINS (Attention Flow)",
+            "information_bottleneck": "INFORMATION BOTTLENECKS",
+            "intervention": "INTERVENTION ANALYSIS",
+            "blind_spot": "BLIND SPOTS (Uncertainty Field)",
+            "confidence_field": "CONFIDENCE MAPPING (Fisher Metric)",
+            "coverage_gap": "COVERAGE ANALYSIS",
+            "topic_drift": "TOPIC DRIFT (Temporal Dynamics)",
+            "phase_transition": "PHASE TRANSITIONS",
+            "exploration_dynamics": "EXPLORATION DYNAMICS",
+            "model_quality": "MODEL QUALITY (Meta-Intelligence)",
+            "insight_reliability": "INSIGHT RELIABILITY",
+            "corpus_diagnosis": "CORPUS DIAGNOSIS",
         }
 
         for cat in categories:
@@ -275,6 +298,7 @@ class InsightEngine:
         prediction_errors: Optional[torch.Tensor] = None,
         recursive_loop=None,
         lineage_graph: Optional[LineageGraph] = None,
+        deep_signal_profile=None,
     ) -> InsightReport:
         """Generate full intelligence report.
 
@@ -288,6 +312,7 @@ class InsightEngine:
             prediction_errors: Optional [N] per-chunk prediction errors.
             recursive_loop: Optional TCD recursive loop for topology info.
             lineage_graph: Optional lineage graph for provenance tracking.
+            deep_signal_profile: Optional DeepSignalProfile from signal harvesting.
         """
         insights = []
 
@@ -303,6 +328,35 @@ class InsightEngine:
 
         # Strategic insights from KPIs
         insights.extend(self._strategic_insights(kpis, features, labels, chunk_texts))
+
+        # Deep signal intelligence engines
+        if deep_signal_profile is not None:
+            from tcd_jepa.manifold.topological_insights import TopologicalInsightGenerator
+            from tcd_jepa.manifold.causal_intelligence import CausalIntelligenceEngine
+            from tcd_jepa.manifold.uncertainty_intelligence import UncertaintyIntelligenceEngine
+            from tcd_jepa.manifold.temporal_intelligence import TemporalIntelligenceEngine
+            from tcd_jepa.manifold.meta_intelligence import MetaIntelligenceEngine
+
+            logger.info("Running deep signal intelligence engines...")
+
+            insights.extend(
+                TopologicalInsightGenerator().generate(deep_signal_profile, chunks, features, labels)
+            )
+            insights.extend(
+                CausalIntelligenceEngine().generate(deep_signal_profile, chunks, features, adjacency)
+            )
+            insights.extend(
+                UncertaintyIntelligenceEngine().generate(deep_signal_profile, chunks, features, labels)
+            )
+            insights.extend(
+                TemporalIntelligenceEngine().generate(deep_signal_profile, chunks, features, labels)
+            )
+            # Meta runs last — it analyzes all other insights
+            insights.extend(
+                MetaIntelligenceEngine().generate(insights, deep_signal_profile, kpis)
+            )
+
+            logger.info(f"Deep signal engines produced {sum(1 for i in insights if i.category in ('knowledge_gap', 'feedback_loop', 'hierarchy', 'topological_stability', 'causal_chain', 'information_bottleneck', 'intervention', 'blind_spot', 'confidence_field', 'coverage_gap', 'topic_drift', 'phase_transition', 'exploration_dynamics', 'model_quality', 'insight_reliability', 'corpus_diagnosis'))} deep insights")
 
         # Divergent analysis (sensitivity, contradictions, counterfactuals)
         if self.enable_divergent and len(insights) > 1:

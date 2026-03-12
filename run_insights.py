@@ -80,6 +80,10 @@ def main():
     output_group.add_argument("--export-lineage", help="Save lineage graph JSON to file")
     output_group.add_argument("--no-divergent", action="store_true",
                               help="Disable divergent analysis (sensitivity, contradictions)")
+    output_group.add_argument("--deep-signals", action="store_true", default=None,
+                              help="Enable deep signal harvesting (default: on when --tcd)")
+    output_group.add_argument("--no-deep-signals", action="store_true",
+                              help="Disable deep signal harvesting for faster runs")
 
     args = parser.parse_args()
 
@@ -109,6 +113,12 @@ def main():
     # Divergent analysis config
     if args.no_divergent:
         config.setdefault("divergent", {})["enabled"] = False
+
+    # Deep signals config
+    if args.no_deep_signals:
+        config.setdefault("deep_signals", {})["enabled"] = False
+    elif args.deep_signals or args.tcd:
+        config.setdefault("deep_signals", {})["enabled"] = True
 
     # Initialize pipeline
     from tcd_jepa.manifold.nl_pipeline import NLIntelligencePipeline
