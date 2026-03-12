@@ -78,9 +78,27 @@ class ManifoldMaskCollator:
         return v
 
     def _sample_geodesic_neighborhood(
-        self, adjacency: torch.Tensor, seed: int, target_size: int,
+        self, adjacency, seed: int, target_size: int,
     ) -> torch.Tensor:
-        """Grow neighborhood via BFS on the causal graph. Pads with random if needed."""
+        """Grow neighborhood via BFS on the causal graph. Pads with random if needed.
+
+        Accepts either a dense tensor or a SparseAdjacency object.
+        """
+        from tcd_jepa.manifold.sparse_graph import SparseAdjacency
+
+        if isinstance(adjacency, SparseAdjacency):
+            reachable = adjacency.bfs(seed, max_depth=10)
+            selected = list(reachable)[:target_size]
+            N = adjacency.num_nodes
+            if len(selected) < target_size:
+                all_nodes = set(range(N))
+                remaining = list(all_nodes - set(selected))
+                import random as _rng
+                _rng.shuffle(remaining)
+                selected.extend(remaining[:target_size - len(selected)])
+            return torch.tensor(selected[:target_size], dtype=torch.long)
+
+        # Dense tensor path
         N = adjacency.shape[0]
         adj_binary = (adjacency.abs() > 1e-6)
         visited = torch.zeros(N, dtype=torch.bool)

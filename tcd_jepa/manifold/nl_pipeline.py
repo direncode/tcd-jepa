@@ -55,15 +55,20 @@ class DocumentManifoldDataset:
         self.adjacency = corpus.adjacency
         self.coords = corpus.coords
 
+        # Use dense adjacency (sparse.to_dense() for compat)
+        adjacency = corpus.adjacency
+        has_links = (adjacency > 0).any() if adjacency is not None else False
+
         self._inner = CausalManifoldDataset(
             fingerprints=corpus.fingerprints,
             coords=corpus.coords,
-            adjacency=corpus.adjacency,
+            adjacency=adjacency,
             velocity=corpus.velocity,
             entity_labels=corpus.entity_labels,
             num_tokens=min(num_tokens, self.num_entities),
             num_samples=num_samples,
-            window_mode="geodesic" if (corpus.adjacency > 0).any() else "random",
+            window_mode="geodesic" if has_links else "random",
+            sparse_adjacency=corpus.sparse_adjacency,
         )
 
     def __len__(self):
@@ -160,11 +165,13 @@ class NLIntelligencePipeline:
         )
 
         insight_cfg = self.cfg["insight"]
+        divergent_cfg = self.cfg.get("divergent", {})
         self.insight_engine = InsightEngine(
             top_k_per_category=insight_cfg["top_k_per_category"],
             anomaly_threshold=insight_cfg["anomaly_threshold"],
             opportunity_sim_threshold=insight_cfg["opportunity_sim_threshold"],
             risk_boundary_ratio=insight_cfg["risk_boundary_ratio"],
+            enable_divergent=divergent_cfg.get("enabled", True),
         )
 
     def _merge_config(self, user_cfg: dict) -> dict:
@@ -270,6 +277,7 @@ class NLIntelligencePipeline:
             kpis=kpis,
             prediction_errors=prediction_errors,
             recursive_loop=self.recursive_loop,
+            lineage_graph=self.corpus.lineage_graph,
         )
 
         elapsed = time.time() - t0

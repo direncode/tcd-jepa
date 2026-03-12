@@ -16,6 +16,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from tcd_jepa.manifold.sparse_graph import SparseAdjacency
+
 
 class CausalManifoldDataset(Dataset):
     """Base dataset for manifold-structured data with causal links.
@@ -41,6 +43,7 @@ class CausalManifoldDataset(Dataset):
         num_tokens: int = 64,
         num_samples: int = 1000,
         window_mode: str = "geodesic",
+        sparse_adjacency: Optional[SparseAdjacency] = None,
     ):
         self.fingerprints = fingerprints
         self.coords = coords
@@ -51,12 +54,29 @@ class CausalManifoldDataset(Dataset):
         self.num_samples = num_samples
         self.window_mode = window_mode
         self.num_entities = fingerprints.shape[0]
+        self.sparse_adjacency = sparse_adjacency
 
     def __len__(self) -> int:
         return self.num_samples
 
     def _sample_geodesic_window(self, seed: int) -> torch.Tensor:
-        """Sample a connected window via BFS on the causal graph."""
+        """Sample a connected window via BFS on the causal graph.
+
+        Uses sparse BFS when a SparseAdjacency is available (O(E) instead of O(N²)).
+        """
+        if self.sparse_adjacency is not None:
+            # Use sparse BFS — much faster for large graphs
+            reachable = self.sparse_adjacency.bfs(seed, max_depth=10)
+            selected = list(reachable)[:self.num_tokens]
+            if len(selected) < self.num_tokens:
+                all_nodes = set(range(self.num_entities))
+                remaining = list(all_nodes - set(selected))
+                import random
+                random.shuffle(remaining)
+                selected.extend(remaining[:self.num_tokens - len(selected)])
+            return torch.tensor(selected[:self.num_tokens], dtype=torch.long)
+
+        # Fallback: dense BFS
         adj_binary = (self.adjacency.abs() > 1e-6)
         visited = torch.zeros(self.num_entities, dtype=torch.bool)
         visited[seed] = True
@@ -99,11 +119,17 @@ class CausalManifoldDataset(Dataset):
         else:
             indices = torch.randperm(self.num_entities)[:self.num_tokens]
 
+        # Use sparse to_dense for the windowed subset when available
+        if self.sparse_adjacency is not None:
+            adj_window = self.sparse_adjacency.to_dense(indices.tolist())
+        else:
+            adj_window = self.adjacency[indices][:, indices]
+
         result = {
             "fingerprints": self.fingerprints[indices],
             "coords": self.coords[indices],
             "velocity": self.velocity[indices],
-            "adjacency": self.adjacency[indices][:, indices],
+            "adjacency": adj_window,
             "indices": indices,
         }
 

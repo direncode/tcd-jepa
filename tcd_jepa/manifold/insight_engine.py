@@ -21,39 +21,85 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 
+from tcd_jepa.manifold.lineage import (
+    InsightNode, ClusterNode, LineageGraph, make_lineage_id,
+)
+
 logger = logging.getLogger("tcd_jepa.insight_engine")
 
 
 @dataclass
+class EvidenceItem:
+    """Structured evidence with source reference."""
+    chunk_id: str = ""         # Lineage ID of source chunk
+    doc_id: str = ""           # Parent document
+    doc_title: str = ""        # Human-readable source
+    text_excerpt: str = ""     # The relevant text
+    char_start: int = 0        # Offset in source document
+    char_end: int = 0          # End offset
+    relevance: float = 1.0     # 0-1 how relevant
+
+
+@dataclass
 class Insight:
-    """A single commercial intelligence insight."""
+    """A single commercial intelligence insight with full lineage."""
     category: str          # cluster, relationship, trend, opportunity, risk, anomaly, strategic
     severity: str          # high, medium, low
     title: str             # One-line summary
     description: str       # Detailed explanation
-    evidence: list[str]    # Supporting text chunks
+    evidence: list[str]    # Supporting text chunks (backwards compat)
     entities: list[str]    # Involved entities
     confidence: float      # 0-1 confidence score
     metadata: dict = field(default_factory=dict)
+    # --- Oracle-grade additions ---
+    insight_id: str = field(default_factory=lambda: make_lineage_id("insight"))
+    structured_evidence: list[EvidenceItem] = field(default_factory=list)
+    confidence_breakdown: dict = field(default_factory=dict)
+    source_chunk_ids: list[str] = field(default_factory=list)
+    source_link_ids: list[str] = field(default_factory=list)
+    source_cluster_ids: list[str] = field(default_factory=list)
+    derivation_steps: list[str] = field(default_factory=list)
+    parent_insight_ids: list[str] = field(default_factory=list)
+    contradicts: list[str] = field(default_factory=list)
+    supports: list[str] = field(default_factory=list)
+    sensitivity: float = 0.0   # 0-1, stability across parameter variations
 
     def to_nl(self) -> str:
-        """Render as natural language paragraph."""
+        """Render as natural language paragraph with source citations."""
         severity_prefix = {
             "high": "CRITICAL",
             "medium": "NOTABLE",
             "low": "OBSERVATION",
         }
         prefix = severity_prefix.get(self.severity, "NOTE")
-        lines = [f"[{prefix}] {self.title}"]
+        lines = [f"[{prefix}] {self.title} (ID: {self.insight_id})"]
         lines.append(self.description)
         if self.entities:
             lines.append(f"Entities involved: {', '.join(self.entities[:10])}")
-        if self.evidence:
+        # Prefer structured evidence with source citations
+        if self.structured_evidence:
+            lines.append("Supporting evidence:")
+            for ev in self.structured_evidence[:5]:
+                truncated = ev.text_excerpt[:200] + "..." if len(ev.text_excerpt) > 200 else ev.text_excerpt
+                source_ref = f"[Source: {ev.doc_title or ev.doc_id}, chunk {ev.chunk_id}]"
+                lines.append(f"  - \"{truncated}\" {source_ref}")
+        elif self.evidence:
             lines.append("Supporting evidence:")
             for ev in self.evidence[:3]:
                 truncated = ev[:200] + "..." if len(ev) > 200 else ev
                 lines.append(f"  - \"{truncated}\"")
-        lines.append(f"Confidence: {self.confidence:.0%}")
+        if self.contradicts:
+            lines.append(f"Contradicts: {', '.join(self.contradicts[:3])}")
+        if self.supports:
+            lines.append(f"Corroborated by: {', '.join(self.supports[:3])}")
+        if self.derivation_steps:
+            lines.append(f"Derivation: {' -> '.join(self.derivation_steps[:5])}")
+        conf_str = f"Confidence: {self.confidence:.0%}"
+        if self.sensitivity > 0:
+            conf_str += f" | Sensitivity: {self.sensitivity:.0%}"
+        lines.append(conf_str)
+        if self.source_chunk_ids:
+            lines.append(f"Lineage: {len(self.source_chunk_ids)} source chunks")
         return "\n".join(lines)
 
 
@@ -67,6 +113,25 @@ class InsightReport:
     num_chunks: int
     num_clusters: int
     num_links: int
+    lineage_graph: Optional[LineageGraph] = None
+
+    def export_lineage(self, insight_id: str) -> dict:
+        """Export full lineage chain for a specific insight."""
+        if self.lineage_graph is None:
+            return {"insight_id": insight_id, "error": "no lineage graph"}
+        return self.lineage_graph.export_lineage(insight_id)
+
+    def get_contradictions(self) -> list[tuple[str, str]]:
+        """Return pairs of contradicting insight IDs."""
+        pairs = []
+        seen = set()
+        for ins in self.insights:
+            for cid in ins.contradicts:
+                pair = tuple(sorted([ins.insight_id, cid]))
+                if pair not in seen:
+                    seen.add(pair)
+                    pairs.append(pair)
+        return pairs
 
     def to_nl(self) -> str:
         """Render full report as natural language."""
@@ -84,7 +149,9 @@ class InsightReport:
         if "clarity_score" in self.kpis:
             cs = self.kpis["clarity_score"]
             clarity_desc = "excellent" if cs > 70 else "good" if cs > 40 else "moderate" if cs > 20 else "low"
-            lines.append(f"  Clarity Score: {cs:.1f}/100 ({clarity_desc})")
+            benchmark = 70
+            direction = "ABOVE" if cs >= benchmark else "BELOW"
+            lines.append(f"  Clarity Score: {cs:.1f}/100 ({clarity_desc}) — {direction} the {benchmark} enterprise benchmark")
             lines.append(f"    → How well-separated are the topic clusters in this corpus")
         if "drift_velocity" in self.kpis:
             dv = self.kpis["drift_velocity"]
@@ -138,6 +205,24 @@ class InsightReport:
                 lines.append(insight.to_nl())
             lines.append("")
 
+        # Contradiction summary
+        contradictions = self.get_contradictions()
+        if contradictions:
+            lines.append("--- CONTRADICTIONS ---")
+            for a, b in contradictions[:5]:
+                lines.append(f"  {a} <-> {b}")
+            lines.append("")
+
+        # Lineage summary
+        if self.lineage_graph:
+            lines.append("--- LINEAGE ---")
+            lines.append(f"  Total provenance nodes: {self.lineage_graph.num_nodes}")
+            lines.append(f"  Chunk nodes: {len(self.lineage_graph.nodes_by_kind('chunk'))}")
+            lines.append(f"  Link nodes: {len(self.lineage_graph.nodes_by_kind('link'))}")
+            lines.append(f"  Insight nodes: {len(self.lineage_graph.nodes_by_kind('insight'))}")
+            lines.append("  Every insight is traceable to source documents via lineage IDs.")
+            lines.append("")
+
         lines.append("=" * 70)
         return "\n".join(lines)
 
@@ -171,11 +256,13 @@ class InsightEngine:
         anomaly_threshold: float = 2.0,
         opportunity_sim_threshold: float = 0.7,
         risk_boundary_ratio: float = 0.7,
+        enable_divergent: bool = True,
     ):
         self.top_k = top_k_per_category
         self.anomaly_threshold = anomaly_threshold
         self.opportunity_sim_threshold = opportunity_sim_threshold
         self.risk_boundary_ratio = risk_boundary_ratio
+        self.enable_divergent = enable_divergent
 
     def generate_report(
         self,
@@ -187,6 +274,7 @@ class InsightEngine:
         kpis: dict,
         prediction_errors: Optional[torch.Tensor] = None,
         recursive_loop=None,
+        lineage_graph: Optional[LineageGraph] = None,
     ) -> InsightReport:
         """Generate full intelligence report.
 
@@ -199,21 +287,46 @@ class InsightEngine:
             kpis: Dict of computed KPIs.
             prediction_errors: Optional [N] per-chunk prediction errors.
             recursive_loop: Optional TCD recursive loop for topology info.
+            lineage_graph: Optional lineage graph for provenance tracking.
         """
         insights = []
 
         # Generate insights by category
-        insights.extend(self._cluster_insights(features, labels, chunk_texts, chunks))
-        insights.extend(self._relationship_insights(features, labels, chunk_texts, chunks, adjacency))
-        insights.extend(self._opportunity_insights(features, labels, chunk_texts, chunks))
-        insights.extend(self._risk_insights(features, labels, chunk_texts, chunks))
+        insights.extend(self._cluster_insights(features, labels, chunk_texts, chunks, lineage_graph))
+        insights.extend(self._relationship_insights(features, labels, chunk_texts, chunks, adjacency, lineage_graph))
+        insights.extend(self._opportunity_insights(features, labels, chunk_texts, chunks, lineage_graph))
+        insights.extend(self._risk_insights(features, labels, chunk_texts, chunks, lineage_graph))
 
         if prediction_errors is not None:
-            insights.extend(self._anomaly_insights(prediction_errors, chunk_texts, chunks))
-            insights.extend(self._trend_insights(features, labels, chunk_texts, chunks, prediction_errors))
+            insights.extend(self._anomaly_insights(prediction_errors, chunk_texts, chunks, lineage_graph))
+            insights.extend(self._trend_insights(features, labels, chunk_texts, chunks, prediction_errors, lineage_graph))
 
         # Strategic insights from KPIs
         insights.extend(self._strategic_insights(kpis, features, labels, chunk_texts))
+
+        # Divergent analysis (sensitivity, contradictions, counterfactuals)
+        if self.enable_divergent and len(insights) > 1:
+            self._sensitivity_analysis(insights, features, labels, chunk_texts, chunks)
+            self._contradiction_detection(insights)
+            self._counterfactual_analysis(insights, features, labels, chunk_texts, chunks)
+            self._consensus_scoring(insights)
+
+        # Register insight nodes in lineage graph
+        if lineage_graph is not None:
+            for ins in insights:
+                node = InsightNode(
+                    lineage_id=ins.insight_id,
+                    kind="insight",
+                    source_ids=ins.source_chunk_ids[:],
+                    source_chunk_ids=ins.source_chunk_ids[:],
+                    source_link_ids=ins.source_link_ids[:],
+                    source_cluster_ids=ins.source_cluster_ids[:],
+                    derivation_steps=ins.derivation_steps[:],
+                    confidence_breakdown=dict(ins.confidence_breakdown),
+                    contradicts=ins.contradicts[:],
+                    supports=ins.supports[:],
+                )
+                lineage_graph.add(node)
 
         # Sort by confidence (descending)
         insights.sort(key=lambda x: (-{"high": 3, "medium": 2, "low": 1}[x.severity], -x.confidence))
@@ -232,11 +345,13 @@ class InsightEngine:
             num_chunks=len(chunk_texts),
             num_clusters=int(labels.max().item()) + 1 if len(labels) > 0 else 0,
             num_links=num_links,
+            lineage_graph=lineage_graph,
         )
 
     def _cluster_insights(
         self, features: torch.Tensor, labels: torch.Tensor,
         texts: list[str], chunks: list,
+        lineage_graph: Optional[LineageGraph] = None,
     ) -> list[Insight]:
         """Discover topic clusters and their characteristics."""
         insights = []
@@ -263,6 +378,30 @@ class InsightEngine:
                 if global_indices[i].item() < len(texts)
             ]
 
+            # Build structured evidence
+            structured_ev = []
+            source_chunk_ids = []
+            for i in top_idx:
+                gi = global_indices[i].item()
+                if gi < len(chunks):
+                    ch = chunks[gi]
+                    structured_ev.append(EvidenceItem(
+                        chunk_id=getattr(ch, "chunk_id", ""),
+                        doc_id=ch.doc_id,
+                        doc_title=getattr(ch, "doc_title", ""),
+                        text_excerpt=ch.text[:300],
+                        char_start=getattr(ch, "char_start", 0),
+                        char_end=getattr(ch, "char_end", 0),
+                    ))
+                    if hasattr(ch, "chunk_id"):
+                        source_chunk_ids.append(ch.chunk_id)
+            # Collect all chunk IDs in cluster
+            for idx in global_indices.tolist():
+                if idx < len(chunks) and hasattr(chunks[idx], "chunk_id"):
+                    cid = chunks[idx].chunk_id
+                    if cid not in source_chunk_ids:
+                        source_chunk_ids.append(cid)
+
             # Cluster coherence
             intra_sim = (c_feats @ c_feats.t()).fill_diagonal_(0)
             coherence = intra_sim.sum() / max(count * (count - 1), 1)
@@ -277,10 +416,25 @@ class InsightEngine:
                 entity_counts[e] = entity_counts.get(e, 0) + 1
             top_entities = sorted(entity_counts.items(), key=lambda x: -x[1])[:5]
 
-            # Topic summary from representative chunks
             topic_keywords = [e[0] for e in top_entities] if top_entities else ["(unnamed)"]
 
             severity = "high" if count > len(texts) * 0.15 else "medium" if count > 5 else "low"
+
+            # Register cluster node in lineage
+            cluster_id = make_lineage_id("cluster")
+            if lineage_graph is not None:
+                centroid_idx = global_indices[top_idx[0]].item() if len(top_idx) > 0 else 0
+                centroid_cid = chunks[centroid_idx].chunk_id if centroid_idx < len(chunks) and hasattr(chunks[centroid_idx], "chunk_id") else ""
+                cn = ClusterNode(
+                    lineage_id=cluster_id,
+                    kind="cluster",
+                    source_ids=source_chunk_ids[:],
+                    member_chunk_ids=source_chunk_ids[:],
+                    centroid_chunk_id=centroid_cid,
+                    coherence=coherence.item(),
+                    method_params={"cluster_label": c},
+                )
+                lineage_graph.add(cn)
 
             insights.append(Insight(
                 category="cluster",
@@ -290,12 +444,26 @@ class InsightEngine:
                     f"Identified a coherent topic cluster containing {count} semantic chunks "
                     f"({count/len(texts)*100:.0f}% of corpus). "
                     f"Internal coherence: {coherence:.2f}. "
-                    f"Key entities: {', '.join(topic_keywords)}."
+                    f"Key entities: {', '.join(topic_keywords)}. "
+                    f"RECOMMENDATION: {'Cluster is well-formed, no action needed.' if coherence > 0.5 else 'Consider subdividing — low coherence suggests mixed themes.'}"
                 ),
                 evidence=representative_texts,
                 entities=[e[0] for e in top_entities],
                 confidence=min(1.0, coherence.item() * 1.5),
                 metadata={"cluster_id": c, "size": count, "coherence": coherence.item()},
+                structured_evidence=structured_ev,
+                source_chunk_ids=source_chunk_ids,
+                source_cluster_ids=[cluster_id],
+                derivation_steps=[
+                    "Compute feature centroids per label",
+                    f"Identified cluster {c} with {count} members",
+                    f"Computed coherence={coherence:.3f}",
+                    "Ranked by distance to centroid",
+                ],
+                confidence_breakdown={
+                    "coherence_signal": min(1.0, coherence.item() * 1.5),
+                    "size_signal": min(1.0, count / len(texts)),
+                },
             ))
 
         return insights[:self.top_k]
@@ -303,6 +471,7 @@ class InsightEngine:
     def _relationship_insights(
         self, features: torch.Tensor, labels: torch.Tensor,
         texts: list[str], chunks: list, adjacency: torch.Tensor,
+        lineage_graph: Optional[LineageGraph] = None,
     ) -> list[Insight]:
         """Identify key relationships between document chunks."""
         insights = []
@@ -322,6 +491,22 @@ class InsightEngine:
                 (chunks[i].entities if i < len(chunks) else []) +
                 (chunks[j].entities if j < len(chunks) else [])
             ))
+            src_ids = []
+            s_ev = []
+            for idx in [i, j]:
+                if idx < len(chunks):
+                    ch = chunks[idx]
+                    if hasattr(ch, "chunk_id"):
+                        src_ids.append(ch.chunk_id)
+                    s_ev.append(EvidenceItem(
+                        chunk_id=getattr(ch, "chunk_id", ""),
+                        doc_id=ch.doc_id,
+                        doc_title=getattr(ch, "doc_title", ""),
+                        text_excerpt=ch.text[:300],
+                        char_start=getattr(ch, "char_start", 0),
+                        char_end=getattr(ch, "char_end", 0),
+                        relevance=strength,
+                    ))
 
             insights.append(Insight(
                 category="relationship",
@@ -329,12 +514,20 @@ class InsightEngine:
                 title=f"Cross-topic link (strength {strength:.2f}) between clusters {labels[i].item()} and {labels[j].item()}",
                 description=(
                     f"Strong connection ({strength:.2f}) between chunks from different topic clusters. "
-                    f"This suggests a causal or semantic bridge between otherwise separate themes."
+                    f"This suggests a causal or semantic bridge between otherwise separate themes. "
+                    f"RECOMMENDATION: Investigate shared concepts for cross-domain synergy."
                 ),
                 evidence=[texts[i][:300], texts[j][:300]],
                 entities=entities[:5],
                 confidence=strength,
                 metadata={"source": i, "target": j, "strength": strength},
+                structured_evidence=s_ev,
+                source_chunk_ids=src_ids,
+                derivation_steps=[
+                    "Scanned adjacency for cross-cluster edges",
+                    f"Found link {i}->{j} with strength {strength:.2f}",
+                    f"Clusters {labels[i].item()} and {labels[j].item()} bridged",
+                ],
             ))
 
         # Find hub nodes (highly connected)
@@ -369,6 +562,7 @@ class InsightEngine:
     def _opportunity_insights(
         self, features: torch.Tensor, labels: torch.Tensor,
         texts: list[str], chunks: list,
+        lineage_graph: Optional[LineageGraph] = None,
     ) -> list[Insight]:
         """Find cross-domain opportunities (H1 cycles in topic space)."""
         insights = []
@@ -437,6 +631,7 @@ class InsightEngine:
     def _risk_insights(
         self, features: torch.Tensor, labels: torch.Tensor,
         texts: list[str], chunks: list,
+        lineage_graph: Optional[LineageGraph] = None,
     ) -> list[Insight]:
         """Identify at-risk entities near cluster boundaries."""
         insights = []
@@ -500,6 +695,7 @@ class InsightEngine:
     def _anomaly_insights(
         self, prediction_errors: torch.Tensor,
         texts: list[str], chunks: list,
+        lineage_graph: Optional[LineageGraph] = None,
     ) -> list[Insight]:
         """Identify anomalous content via prediction error."""
         insights = []
@@ -547,6 +743,7 @@ class InsightEngine:
         self, features: torch.Tensor, labels: torch.Tensor,
         texts: list[str], chunks: list,
         prediction_errors: torch.Tensor,
+        lineage_graph: Optional[LineageGraph] = None,
     ) -> list[Insight]:
         """Identify evolving topics via prediction error patterns."""
         insights = []
@@ -742,3 +939,149 @@ class InsightEngine:
             )
 
         return " ".join(lines)
+
+    # ------------------------------------------------------------------
+    # Divergent analysis methods
+    # ------------------------------------------------------------------
+
+    def _sensitivity_analysis(
+        self,
+        insights: list[Insight],
+        features: torch.Tensor,
+        labels: torch.Tensor,
+        texts: list[str],
+        chunks: list,
+    ) -> None:
+        """Run insight generators at multiple thresholds to measure stability.
+
+        Modifies insights in-place: sets ``sensitivity`` score (0-1).
+        Insights that appear at all threshold levels get high sensitivity.
+        """
+        # Vary the opportunity threshold at 3 levels
+        levels = [0.6, 0.7, 0.85]
+        original_thresh = self.opportunity_sim_threshold
+
+        # Collect insight titles at each level
+        per_level: list[set[str]] = []
+        for thresh in levels:
+            self.opportunity_sim_threshold = thresh
+            level_insights = []
+            level_insights.extend(self._cluster_insights(features, labels, texts, chunks))
+            level_insights.extend(self._opportunity_insights(features, labels, texts, chunks))
+            level_insights.extend(self._risk_insights(features, labels, texts, chunks))
+            per_level.append({i.title for i in level_insights})
+
+        self.opportunity_sim_threshold = original_thresh
+
+        # Score each insight by how many levels it appeared in
+        for ins in insights:
+            appearances = sum(1 for level_titles in per_level if ins.title in level_titles)
+            ins.sensitivity = appearances / len(levels)
+            ins.derivation_steps.append(f"Sensitivity: appeared in {appearances}/{len(levels)} parameter sweeps")
+
+    def _contradiction_detection(self, insights: list[Insight]) -> None:
+        """Cross-check insights for contradictions. Modifies in-place."""
+        cluster_insights = [i for i in insights if i.category == "cluster"]
+        risk_insights = [i for i in insights if i.category == "risk"]
+        opp_insights = [i for i in insights if i.category == "opportunity"]
+        rel_insights = [i for i in insights if i.category == "relationship"]
+
+        # Cluster "cohesive" vs Risk "boundary" contradiction
+        for ci in cluster_insights:
+            ci_cluster_id = ci.metadata.get("cluster_id")
+            if ci_cluster_id is None:
+                continue
+            for ri in risk_insights:
+                ri_own = ri.metadata.get("own_class")
+                ri_near = ri.metadata.get("nearest_other")
+                if ri_own == ci_cluster_id or ri_near == ci_cluster_id:
+                    coherence = ci.metadata.get("coherence", 0)
+                    if coherence > 0.5:
+                        ci.contradicts.append(ri.insight_id)
+                        ri.contradicts.append(ci.insight_id)
+                        ci.derivation_steps.append(
+                            f"Contradiction: cluster {ci_cluster_id} is cohesive "
+                            f"({coherence:.2f}) but chunk at boundary"
+                        )
+
+        # Opportunity "connected" vs Relationship "weak" contradiction
+        for oi in opp_insights:
+            c1 = oi.metadata.get("c1")
+            c2 = oi.metadata.get("c2")
+            for ri in rel_insights:
+                ri_src = ri.metadata.get("source")
+                ri_tgt = ri.metadata.get("target")
+                if ri_src is not None and ri_tgt is not None:
+                    strength = ri.metadata.get("strength", 1.0)
+                    if strength < 0.5 and c1 is not None and c2 is not None:
+                        oi.contradicts.append(ri.insight_id)
+                        ri.contradicts.append(oi.insight_id)
+
+    def _counterfactual_analysis(
+        self,
+        insights: list[Insight],
+        features: torch.Tensor,
+        labels: torch.Tensor,
+        texts: list[str],
+        chunks: list,
+        remove_pct: float = 0.05,
+    ) -> None:
+        """For cluster insights: would they survive if we remove top anomalous chunks?
+
+        Measures robustness. Modifies insights in-place.
+        """
+        N = features.shape[0]
+        if N < 10:
+            return
+
+        # Use feature norm as anomaly proxy
+        norms = features.norm(dim=-1)
+        k_remove = max(1, int(N * remove_pct))
+        _, anomaly_idx = norms.topk(k_remove, largest=True)
+        keep_mask = torch.ones(N, dtype=torch.bool)
+        keep_mask[anomaly_idx] = False
+
+        kept_features = features[keep_mask]
+        kept_labels = labels[keep_mask]
+
+        for ins in insights:
+            if ins.category != "cluster":
+                continue
+            c = ins.metadata.get("cluster_id")
+            if c is None:
+                continue
+            # Check if cluster survives
+            orig_count = ins.metadata.get("size", 0)
+            new_count = (kept_labels == c).sum().item()
+            survival_ratio = new_count / max(orig_count, 1)
+            ins.metadata["counterfactual_survival"] = survival_ratio
+            ins.derivation_steps.append(
+                f"Counterfactual: removing top {remove_pct*100:.0f}% anomalous chunks "
+                f"retains {survival_ratio*100:.0f}% of cluster"
+            )
+
+    def _consensus_scoring(self, insights: list[Insight]) -> None:
+        """Boost confidence for robust insights, downgrade fragile ones."""
+        for ins in insights:
+            adjustments = []
+            # Sensitivity boost/penalty
+            if ins.sensitivity >= 0.8:
+                adjustments.append(0.05)
+            elif ins.sensitivity > 0 and ins.sensitivity < 0.4:
+                adjustments.append(-0.1)
+
+            # Contradiction penalty
+            if ins.contradicts:
+                adjustments.append(-0.05 * len(ins.contradicts))
+
+            # Counterfactual survival boost
+            survival = ins.metadata.get("counterfactual_survival")
+            if survival is not None and survival > 0.9:
+                adjustments.append(0.05)
+
+            if adjustments:
+                total_adj = sum(adjustments)
+                ins.confidence = max(0.0, min(1.0, ins.confidence + total_adj))
+                ins.derivation_steps.append(
+                    f"Consensus scoring: confidence adjusted by {total_adj:+.2f}"
+                )

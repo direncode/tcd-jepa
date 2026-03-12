@@ -75,6 +75,11 @@ def main():
     output_group.add_argument("--save-model", help="Save trained model to file")
     output_group.add_argument("--json", action="store_true", help="Output JSON instead of NL")
     output_group.add_argument("--quiet", action="store_true", help="Minimal output")
+    output_group.add_argument("--lineage", action="store_true",
+                              help="Include full lineage IDs in JSON output")
+    output_group.add_argument("--export-lineage", help="Save lineage graph JSON to file")
+    output_group.add_argument("--no-divergent", action="store_true",
+                              help="Disable divergent analysis (sensitivity, contradictions)")
 
     args = parser.parse_args()
 
@@ -100,6 +105,10 @@ def main():
         "embedding_model": args.embedding_model,
         "semantic_threshold": args.semantic_threshold,
     })
+
+    # Divergent analysis config
+    if args.no_divergent:
+        config.setdefault("divergent", {})["enabled"] = False
 
     # Initialize pipeline
     from tcd_jepa.manifold.nl_pipeline import NLIntelligencePipeline
@@ -165,6 +174,30 @@ def main():
 
     # Output
     if args.json:
+        insight_list = []
+        for i in report.insights:
+            entry = {
+                "insight_id": i.insight_id,
+                "category": i.category,
+                "severity": i.severity,
+                "title": i.title,
+                "description": i.description,
+                "entities": i.entities,
+                "confidence": i.confidence,
+                "sensitivity": i.sensitivity,
+                "evidence": i.evidence[:2],
+                "source_chunk_ids": i.source_chunk_ids,
+                "source_link_ids": i.source_link_ids,
+                "source_cluster_ids": i.source_cluster_ids,
+                "derivation_steps": i.derivation_steps,
+                "confidence_breakdown": i.confidence_breakdown,
+                "contradicts": i.contradicts,
+                "supports": i.supports,
+            }
+            if args.lineage and report.lineage_graph:
+                entry["lineage"] = report.export_lineage(i.insight_id)
+            insight_list.append(entry)
+
         output = {
             "summary": report.summary,
             "kpis": report.kpis,
@@ -172,18 +205,8 @@ def main():
             "num_chunks": report.num_chunks,
             "num_clusters": report.num_clusters,
             "num_links": report.num_links,
-            "insights": [
-                {
-                    "category": i.category,
-                    "severity": i.severity,
-                    "title": i.title,
-                    "description": i.description,
-                    "entities": i.entities,
-                    "confidence": i.confidence,
-                    "evidence": i.evidence[:2],
-                }
-                for i in report.insights
-            ],
+            "contradictions": [list(p) for p in report.get_contradictions()],
+            "insights": insight_list,
         }
         print(json.dumps(output, indent=2, default=str))
     else:
@@ -203,20 +226,36 @@ def main():
             json.dump({
                 "summary": report.summary,
                 "kpis": report.kpis,
+                "contradictions": [list(p) for p in report.get_contradictions()],
                 "insights": [
                     {
+                        "insight_id": i.insight_id,
                         "category": i.category,
                         "severity": i.severity,
                         "title": i.title,
                         "description": i.description,
                         "entities": i.entities,
                         "confidence": i.confidence,
+                        "sensitivity": i.sensitivity,
+                        "source_chunk_ids": i.source_chunk_ids,
+                        "derivation_steps": i.derivation_steps,
+                        "confidence_breakdown": i.confidence_breakdown,
+                        "contradicts": i.contradicts,
+                        "supports": i.supports,
                     }
                     for i in report.insights
                 ],
             }, f, indent=2, default=str)
 
         logger.info(f"Results saved to {out_dir}")
+
+    # Export lineage graph
+    if args.export_lineage and report.lineage_graph:
+        lineage_path = Path(args.export_lineage)
+        lineage_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lineage_path, "w") as f:
+            f.write(report.lineage_graph.to_json())
+        logger.info(f"Lineage graph saved to {lineage_path}")
 
     if args.save_corpus and pipeline.corpus:
         pipeline.processor.save(pipeline.corpus, args.save_corpus)

@@ -73,6 +73,23 @@ insight:
   opportunity_sim_threshold: 0.7  # cross-topic similarity threshold
   risk_boundary_ratio: 0.7     # distance ratio for boundary detection
 
+# Lineage tracking
+lineage:
+  enabled: true                  # track provenance for every artifact
+  export_format: json            # json or compact
+
+# Divergent analysis (multi-path insight generation)
+divergent:
+  enabled: true                  # sensitivity, contradictions, counterfactuals
+  sensitivity_levels: 3          # number of threshold variations to test
+  counterfactual_top_k: 5        # top-k insights for counterfactual analysis
+  remove_pct: 0.05               # fraction of anomalous chunks to remove
+
+# Scale settings
+scale:
+  similarity_batch_size: 1000    # batch size for top-k cosine similarity
+  sparse_threshold: 1.0e-6       # minimum edge weight in sparse graph
+
 logging:
   use_wandb: false
   log_dir: ./logs/nl_pipeline

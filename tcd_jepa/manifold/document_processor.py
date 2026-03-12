@@ -26,6 +26,11 @@ from typing import Optional
 import numpy as np
 import torch
 
+from tcd_jepa.manifold.lineage import (
+    ChunkNode, LinkNode, ClusterNode, LineageGraph, make_lineage_id,
+)
+from tcd_jepa.manifold.sparse_graph import SparseAdjacency
+
 logger = logging.getLogger("tcd_jepa.document_processor")
 
 
@@ -35,12 +40,20 @@ class DocumentChunk:
     text: str
     doc_id: str
     chunk_idx: int
+    chunk_id: str = ""          # LineageID (chk_...)
     doc_title: str = ""
     section: str = ""
+    char_start: int = 0         # character offset in source document
+    char_end: int = 0           # end offset in source document
     timestamp: Optional[float] = None
     entities: list[str] = field(default_factory=list)
+    entity_spans: list[dict] = field(default_factory=list)  # [{entity, start, end}]
     urls: list[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not self.chunk_id:
+            self.chunk_id = make_lineage_id("chunk")
 
 
 @dataclass
@@ -49,11 +62,15 @@ class ProcessedCorpus:
     fingerprints: torch.Tensor    # [N, 384] embeddings
     coords: torch.Tensor          # [N, 3] S² positions
     velocity: torch.Tensor        # [N, 3] temporal signal
-    adjacency: torch.Tensor       # [N, N] causal link weights
+    adjacency: torch.Tensor       # [N, N] causal link weights (dense, backwards compat)
     chunks: list[DocumentChunk]   # Original text chunks (for insight generation)
     entity_labels: torch.Tensor   # [N] cluster assignments
     doc_ids: list[str]            # Document ID per chunk
     chunk_texts: list[str]        # Raw text per chunk
+    # --- Oracle-grade additions ---
+    sparse_adjacency: Optional[SparseAdjacency] = None   # scalable edge-list graph
+    lineage_graph: Optional[LineageGraph] = None          # full provenance DAG
+    chunk_id_map: Optional[dict] = None                   # lineage_id → tensor index
 
 
 class DocumentChunker:
@@ -94,17 +111,27 @@ class DocumentChunker:
                 continue
 
             entities = self._extract_entities(chunk_text)
+            entity_spans = self._extract_entity_spans(chunk_text)
             urls = self._extract_urls(chunk_text)
             section = self._detect_section(chunk_text, text)
 
+            # Track character offsets in the source document
+            char_start = text.find(chunk_text[:80]) if chunk_text else 0
+            char_start = max(char_start, 0)
+            char_end = char_start + len(chunk_text)
+
+            resolved_doc_id = doc_id or f"doc_{hash(text[:100]) % 10000:04d}"
             chunks.append(DocumentChunk(
                 text=chunk_text,
-                doc_id=doc_id or f"doc_{hash(text[:100]) % 10000:04d}",
+                doc_id=resolved_doc_id,
                 chunk_idx=i,
                 doc_title=doc_title,
                 section=section,
+                char_start=char_start,
+                char_end=char_end,
                 timestamp=timestamp,
                 entities=entities,
+                entity_spans=entity_spans,
                 urls=urls,
             ))
 
@@ -179,6 +206,35 @@ class DocumentChunker:
                 else:
                     i += 1
         return list(entities)
+
+    def _extract_entity_spans(self, text: str) -> list[dict]:
+        """Extract named entities with character offsets."""
+        spans = []
+        sentences = re.split(r'[.!?]\s+', text)
+        offset = 0
+        for sent in sentences:
+            words = sent.split()
+            if len(words) < 2:
+                offset += len(sent) + 2
+                continue
+            i = 1
+            while i < len(words):
+                if words[i][0:1].isupper() and words[i].isalpha():
+                    entity_words = [words[i]]
+                    j = i + 1
+                    while j < len(words) and words[j][0:1].isupper() and words[j].isalpha():
+                        entity_words.append(words[j])
+                        j += 1
+                    name = " ".join(entity_words)
+                    if len(name) > 2:
+                        start = text.find(name, offset)
+                        if start >= 0:
+                            spans.append({"entity": name, "start": start, "end": start + len(name)})
+                    i = j
+                else:
+                    i += 1
+            offset += len(sent) + 2
+        return spans
 
     def _extract_urls(self, text: str) -> list[str]:
         """Extract URLs from text."""
@@ -358,42 +414,68 @@ class CausalLinkDiscoverer:
         self,
         chunks: list[DocumentChunk],
         embeddings: torch.Tensor,
-    ) -> torch.Tensor:
-        """Build weighted directed adjacency matrix from document chunks.
+        lineage_graph: Optional[LineageGraph] = None,
+    ) -> tuple[torch.Tensor, SparseAdjacency]:
+        """Build weighted directed adjacency from document chunks.
 
-        Link types (matching Latent Ocean):
-        - Structural (weight ~0.8): sequential chunks in same document
-        - Semantic (weight ~0.7): cosine similarity above threshold
-        - Reference (weight ~0.9): shared entities or URLs
-        - Co-occurrence (weight ~0.6): shared entities across documents
+        Returns:
+            (dense_adjacency, sparse_adjacency) — dense for backwards compat,
+            sparse for scale.  Both contain the same edges.
         """
         N = len(chunks)
-        adjacency = torch.zeros(N, N)
+        sparse = SparseAdjacency()
+
+        def _add(i: int, j: int, strength: float, link_type: str) -> None:
+            """Add to sparse graph (and optionally lineage)."""
+            link = sparse.add_link(i, j, strength, link_type=link_type)
+            if lineage_graph is not None:
+                src_cid = chunks[i].chunk_id if i < len(chunks) else ""
+                tgt_cid = chunks[j].chunk_id if j < len(chunks) else ""
+                ln = LinkNode(
+                    lineage_id=link.link_id,
+                    kind="link",
+                    source_ids=[src_cid, tgt_cid],
+                    source_chunk_id=src_cid,
+                    target_chunk_id=tgt_cid,
+                    link_type=link_type,
+                    strength=strength,
+                    method="causal_link_discoverer",
+                )
+                lineage_graph.add(ln)
 
         # 1. Structural links (same document, sequential)
-        for i in range(N):
-            for j in range(N):
-                if i == j:
-                    continue
-                if chunks[i].doc_id == chunks[j].doc_id:
-                    gap = abs(chunks[i].chunk_idx - chunks[j].chunk_idx)
+        doc_groups: dict[str, list[int]] = {}
+        for i, c in enumerate(chunks):
+            doc_groups.setdefault(c.doc_id, []).append(i)
+
+        for indices in doc_groups.values():
+            idx_sorted = sorted(indices, key=lambda x: chunks[x].chunk_idx)
+            for pos, i in enumerate(idx_sorted):
+                for j in idx_sorted[pos + 1: pos + 4]:  # look ahead up to 3
+                    gap = chunks[j].chunk_idx - chunks[i].chunk_idx
                     if gap == 1:
-                        # Direct sequence: strong directed link (i→j if j follows i)
-                        if chunks[j].chunk_idx > chunks[i].chunk_idx:
-                            adjacency[i, j] = max(adjacency[i, j], self.structural_weight)
+                        _add(i, j, self.structural_weight, "structural")
                     elif gap <= 3:
-                        # Same section proximity
-                        weight = self.structural_weight * 0.5 / gap
-                        adjacency[i, j] = max(adjacency[i, j], weight)
+                        _add(i, j, self.structural_weight * 0.5 / gap, "structural")
 
-        # 2. Semantic links (cosine similarity)
+        # 2. Semantic links — batch-wise top-k cosine similarity
         emb_norm = embeddings / (embeddings.norm(dim=-1, keepdim=True) + 1e-8)
-        sim = emb_norm @ emb_norm.t()
-        semantic_mask = (sim > self.semantic_threshold) & (torch.eye(N) == 0)
-        semantic_links = sim * semantic_mask.float() * self.semantic_weight
-        adjacency = torch.maximum(adjacency, semantic_links)
+        batch_size = 1000
+        for start in range(0, N, batch_size):
+            end = min(start + batch_size, N)
+            batch = emb_norm[start:end]           # [B, D]
+            sims = batch @ emb_norm.t()            # [B, N]
+            for local_i in range(sims.shape[0]):
+                global_i = start + local_i
+                row = sims[local_i]
+                above = torch.where(row > self.semantic_threshold)[0]
+                for j_t in above:
+                    j = j_t.item()
+                    if j == global_i:
+                        continue
+                    _add(global_i, j, float(row[j].item()) * self.semantic_weight, "semantic")
 
-        # 3. Reference links (shared entities)
+        # 3. Reference links (shared entities / URLs)
         for i in range(N):
             entities_i = set(chunks[i].entities)
             urls_i = set(chunks[i].urls)
@@ -402,32 +484,33 @@ class CausalLinkDiscoverer:
             for j in range(i + 1, N):
                 entities_j = set(chunks[j].entities)
                 urls_j = set(chunks[j].urls)
-
-                # Shared entities
                 shared_entities = entities_i & entities_j
                 if shared_entities:
                     strength = min(1.0, len(shared_entities) * 0.3) * self.reference_weight
-                    adjacency[i, j] = max(adjacency[i, j], strength)
-                    adjacency[j, i] = max(adjacency[j, i], strength * 0.8)
-
-                # Shared URLs
+                    _add(i, j, strength, "reference")
+                    _add(j, i, strength * 0.8, "reference")
                 shared_urls = urls_i & urls_j
                 if shared_urls:
                     strength = min(1.0, len(shared_urls) * 0.4) * self.reference_weight
-                    adjacency[i, j] = max(adjacency[i, j], strength)
-                    adjacency[j, i] = max(adjacency[j, i], strength)
+                    _add(i, j, strength, "reference")
+                    _add(j, i, strength, "reference")
 
         # 4. Co-occurrence links (cross-document entity overlap)
         for i in range(N):
+            if not chunks[i].entities:
+                continue
+            entities_i = set(chunks[i].entities)
             for j in range(N):
                 if i == j or chunks[i].doc_id == chunks[j].doc_id:
                     continue
-                shared = set(chunks[i].entities) & set(chunks[j].entities)
+                shared = entities_i & set(chunks[j].entities)
                 if shared:
                     strength = min(1.0, len(shared) * 0.2) * self.cooccurrence_weight
-                    adjacency[i, j] = max(adjacency[i, j], strength)
+                    _add(i, j, strength, "cooccurrence")
 
-        return adjacency
+        # Build dense matrix for backwards compatibility
+        adjacency = sparse.to_dense(list(range(N)))
+        return adjacency, sparse
 
 
 class VelocityEstimator:
@@ -551,6 +634,25 @@ class DocumentProcessor:
 
         logger.info(f"Chunked {len(documents)} documents into {len(all_chunks)} chunks")
 
+        # Build lineage graph and register chunk nodes
+        lineage = LineageGraph()
+        chunk_id_map: dict[str, int] = {}
+        for idx, chunk in enumerate(all_chunks):
+            text_hash = hashlib.sha256(chunk.text.encode("utf-8")).hexdigest()[:16]
+            cn = ChunkNode(
+                lineage_id=chunk.chunk_id,
+                kind="chunk",
+                doc_id=chunk.doc_id,
+                doc_title=chunk.doc_title,
+                chunk_idx=chunk.chunk_idx,
+                text_hash=text_hash,
+                char_start=chunk.char_start,
+                char_end=chunk.char_end,
+                entity_spans=chunk.entity_spans,
+            )
+            lineage.add(cn)
+            chunk_id_map[chunk.chunk_id] = idx
+
         # 2. Embed chunks
         texts = [c.text for c in all_chunks]
         fingerprints = self.embedder.embed(texts)
@@ -560,10 +662,15 @@ class DocumentProcessor:
         coords = self.projector.project(fingerprints)
         logger.info(f"Projected to S² at radius {self.sphere_radius}")
 
-        # 4. Discover causal links
-        adjacency = self.link_discoverer.discover_links(all_chunks, fingerprints)
-        link_count = (adjacency > 0).sum().item()
-        logger.info(f"Discovered {link_count} causal links ({link_count / max(len(all_chunks)**2, 1) * 100:.1f}% density)")
+        # 4. Discover causal links (sparse + dense)
+        adjacency, sparse_adj = self.link_discoverer.discover_links(
+            all_chunks, fingerprints, lineage_graph=lineage,
+        )
+        link_count = sparse_adj.num_links
+        logger.info(
+            f"Discovered {link_count} causal links "
+            f"({link_count / max(len(all_chunks)**2, 1) * 100:.1f}% density)"
+        )
 
         # 5. Estimate velocities
         velocity = self.velocity_estimator.estimate(all_chunks, coords, adjacency)
@@ -580,6 +687,9 @@ class DocumentProcessor:
             entity_labels=entity_labels,
             doc_ids=[c.doc_id for c in all_chunks],
             chunk_texts=texts,
+            sparse_adjacency=sparse_adj,
+            lineage_graph=lineage,
+            chunk_id_map=chunk_id_map,
         )
 
     def process_text(self, text: str, doc_id: str = "input") -> ProcessedCorpus:
@@ -671,14 +781,23 @@ class DocumentProcessor:
             meta.append({
                 "text": chunk.text,
                 "doc_id": chunk.doc_id,
+                "chunk_id": chunk.chunk_id,
                 "chunk_idx": chunk.chunk_idx,
                 "doc_title": chunk.doc_title,
                 "section": chunk.section,
+                "char_start": chunk.char_start,
+                "char_end": chunk.char_end,
                 "entities": chunk.entities,
+                "entity_spans": chunk.entity_spans,
                 "urls": chunk.urls,
             })
         with open(out / "chunk_metadata.json", "w") as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
+
+        # Save lineage graph
+        if corpus.lineage_graph is not None:
+            with open(out / "lineage_graph.json", "w") as f:
+                f.write(corpus.lineage_graph.to_json())
 
         logger.info(f"Saved processed corpus ({len(corpus.chunks)} chunks) to {out}")
 
@@ -701,12 +820,20 @@ class DocumentProcessor:
             chunks.append(DocumentChunk(
                 text=m["text"],
                 doc_id=m["doc_id"],
+                chunk_id=m.get("chunk_id", ""),
                 chunk_idx=m["chunk_idx"],
                 doc_title=m.get("doc_title", ""),
                 section=m.get("section", ""),
+                char_start=m.get("char_start", 0),
+                char_end=m.get("char_end", 0),
                 entities=m.get("entities", []),
+                entity_spans=m.get("entity_spans", []),
                 urls=m.get("urls", []),
             ))
+
+        # Rebuild sparse adjacency from dense
+        sparse_adj = SparseAdjacency.from_dense(adjacency)
+        chunk_id_map = {c.chunk_id: i for i, c in enumerate(chunks)}
 
         return ProcessedCorpus(
             fingerprints=fingerprints,
@@ -717,4 +844,6 @@ class DocumentProcessor:
             entity_labels=entity_labels,
             doc_ids=[c.doc_id for c in chunks],
             chunk_texts=[c.text for c in chunks],
+            sparse_adjacency=sparse_adj,
+            chunk_id_map=chunk_id_map,
         )
