@@ -47,16 +47,25 @@ class VisionTransformerPredictor(nn.Module):
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
 
-        # Sinusoidal positional embeddings for predictor
-        self.predictor_pos_embed = nn.Parameter(
-            torch.zeros(1, num_patches, predictor_embed_dim), requires_grad=False
-        )
-        predictor_pos_embed = get_2d_sincos_pos_embed(
-            predictor_embed_dim, int(num_patches**0.5), cls_token=False
-        )
-        self.predictor_pos_embed.data.copy_(
-            torch.from_numpy(predictor_pos_embed).float().unsqueeze(0)
-        )
+        # Positional embeddings for predictor
+        # Use 2D sincos for perfect-square token counts (vision), learnable otherwise (manifold)
+        grid_size = int(num_patches**0.5)
+        if grid_size * grid_size == num_patches:
+            self.predictor_pos_embed = nn.Parameter(
+                torch.zeros(1, num_patches, predictor_embed_dim), requires_grad=False
+            )
+            predictor_pos_embed = get_2d_sincos_pos_embed(
+                predictor_embed_dim, grid_size, cls_token=False
+            )
+            self.predictor_pos_embed.data.copy_(
+                torch.from_numpy(predictor_pos_embed).float().unsqueeze(0)
+            )
+        else:
+            # Learnable positional embeddings for non-grid token layouts (manifold data)
+            self.predictor_pos_embed = nn.Parameter(
+                torch.zeros(1, num_patches, predictor_embed_dim)
+            )
+            nn.init.trunc_normal_(self.predictor_pos_embed, std=0.02)
 
         self.predictor_blocks = nn.ModuleList([
             Block(

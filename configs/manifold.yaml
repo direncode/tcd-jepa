@@ -1,0 +1,70 @@
+# Latent Ocean TCD-JEPA configuration
+# Entities on S² (radius 4.5) with 384D sentence-transformer fingerprints,
+# directed causal links, and tangent-space velocities.
+
+model:
+  encoder:
+    fingerprint_dim: 384        # all-MiniLM-L6-v2 output
+    num_tokens: 64              # entities per window
+    coord_dim: 3                # S² Cartesian (x, y, z)
+    embed_dim: 192
+    depth: 6
+    num_heads: 3
+    mlp_ratio: 4.0
+    use_causal_encoding: true
+    use_velocity_encoding: true
+    sphere_radius: 4.5
+  predictor:
+    predictor_embed_dim: 96
+    predictor_depth: 4
+    num_heads: 3
+  ema:
+    start: 0.996
+    end: 1.0
+
+training:
+  epochs: 50
+  batch_size: 32
+  learning_rate: 0.001
+  start_lr: 0.0001
+  final_lr: 0.0
+  weight_decay: 0.05
+  final_weight_decay: 0.05
+  warmup_epochs: 5
+  optimizer: adamw
+  checkpoint_freq: 10
+  seed: 42
+
+data:
+  dataset: synthetic_manifold   # or "latent_ocean" with data_dir
+  # data_dir: ./data/latent_ocean  # for real Latent Ocean exports
+  num_entities: 256
+  num_clusters: 6
+  num_tokens: 64
+  fingerprint_dim: 384
+  causal_link_prob: 0.15
+  cross_cluster_prob: 0.03
+  sphere_radius: 4.5
+  num_samples: 500
+
+masking:
+  context_ratio: [0.3, 0.5]
+  target_ratio: [0.15, 0.3]
+  num_context_masks: 4
+  num_target_masks: 1
+  min_keep: 4
+  use_geodesic: true
+  sphere_radius: 4.5
+
+tcd:
+  use_dynamic_predictor: true
+  explore_every: 5
+  crystallize_every: 10
+  langevin_steps: 50
+  langevin_step_size: 0.01
+  persistence_threshold: 0.3
+  max_modules: 10
+
+logging:
+  use_wandb: false
+  log_dir: ./logs/manifold
