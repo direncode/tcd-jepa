@@ -5,4 +5,9 @@ manifolds with causal links, rather than images. The core TCD topology pipeline
 (persistent homology, crystallization, module factory) is already manifold-agnostic;
 this package provides the input/encoder/masking layers that bridge manifold data
 to the existing transformer + TCD infrastructure.
+
+NL Intelligence Pipeline:
+- DocumentProcessor: raw text → chunks → embeddings → manifold placement → causal links
+- InsightEngine: TCD signals → structured insights → natural language reports
+- NLIntelligencePipeline: end-to-end orchestrator (documents in → insights out)
 """

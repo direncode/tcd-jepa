@@ -1,0 +1,78 @@
+# TCD-JEPA NL Intelligence Pipeline Configuration
+# Processes raw documents → manifold representation → commercial insights
+
+model:
+  encoder:
+    fingerprint_dim: 384        # sentence-transformer output (all-MiniLM-L6-v2)
+    num_tokens: 64              # chunks per training window
+    coord_dim: 3                # S² Cartesian (x, y, z)
+    embed_dim: 192
+    depth: 6
+    num_heads: 3
+    mlp_ratio: 4.0
+    use_causal_encoding: true   # encode document link structure
+    use_velocity_encoding: true # encode temporal dynamics
+    sphere_radius: 4.5
+  predictor:
+    predictor_embed_dim: 96
+    predictor_depth: 4
+    num_heads: 3
+  ema:
+    start: 0.996
+    end: 1.0
+
+training:
+  epochs: 30
+  batch_size: 16
+  learning_rate: 0.001
+  start_lr: 0.0001
+  final_lr: 0.0
+  weight_decay: 0.05
+  final_weight_decay: 0.05
+  warmup_epochs: 3
+  optimizer: adamw
+  checkpoint_freq: 10
+  seed: 42
+
+masking:
+  context_ratio: [0.3, 0.5]
+  target_ratio: [0.15, 0.3]
+  num_context_masks: 4
+  num_target_masks: 1
+  min_keep: 4
+  use_geodesic: true
+  sphere_radius: 4.5
+
+tcd:
+  use_dynamic_predictor: true
+  explore_every: 5
+  crystallize_every: 10
+  langevin_steps: 50
+  langevin_step_size: 0.01
+  persistence_threshold: 0.3
+  max_modules: 10
+
+# Document processing settings
+document:
+  chunk_size: 256               # words per chunk
+  chunk_overlap: 64             # overlap between chunks
+  min_chunk_length: 20          # minimum characters per chunk
+  semantic_threshold: 0.65      # cosine sim threshold for semantic links
+  embedding_model: all-MiniLM-L6-v2  # sentence-transformer model
+  embedding_device: cpu         # cpu or cuda
+  min_chunks: 16                # minimum chunks for training
+  extensions:                   # file extensions to process
+    - .txt
+    - .md
+    - .rst
+
+# Insight generation settings
+insight:
+  top_k_per_category: 5        # max insights per category
+  anomaly_threshold: 2.0        # z-score threshold for anomalies
+  opportunity_sim_threshold: 0.7  # cross-topic similarity threshold
+  risk_boundary_ratio: 0.7     # distance ratio for boundary detection
+
+logging:
+  use_wandb: false
+  log_dir: ./logs/nl_pipeline
