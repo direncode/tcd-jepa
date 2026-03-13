@@ -298,6 +298,8 @@ class NLIntelligencePipeline:
             recursive_loop=self.recursive_loop,
             lineage_graph=self.corpus.lineage_graph,
             deep_signal_profile=deep_profile,
+            coords=self.corpus.coords,
+            velocity=self.corpus.velocity,
         )
 
         elapsed = time.time() - t0

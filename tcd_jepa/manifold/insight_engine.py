@@ -299,6 +299,8 @@ class InsightEngine:
         recursive_loop=None,
         lineage_graph: Optional[LineageGraph] = None,
         deep_signal_profile=None,
+        coords: Optional[torch.Tensor] = None,
+        velocity: Optional[torch.Tensor] = None,
     ) -> InsightReport:
         """Generate full intelligence report.
 
@@ -313,6 +315,8 @@ class InsightEngine:
             recursive_loop: Optional TCD recursive loop for topology info.
             lineage_graph: Optional lineage graph for provenance tracking.
             deep_signal_profile: Optional DeepSignalProfile from signal harvesting.
+            coords: Optional [N, 3] manifold coordinates.
+            velocity: Optional [N, D] velocity field.
         """
         insights = []
 
@@ -349,7 +353,10 @@ class InsightEngine:
                 UncertaintyIntelligenceEngine().generate(deep_signal_profile, chunks, features, labels)
             )
             insights.extend(
-                TemporalIntelligenceEngine().generate(deep_signal_profile, chunks, features, labels)
+                TemporalIntelligenceEngine().generate(
+                    deep_signal_profile, chunks, features, labels,
+                    coords=coords, velocity=velocity,
+                )
             )
             # Meta runs last — it analyzes all other insights
             insights.extend(

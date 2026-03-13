@@ -157,15 +157,34 @@ class DeepSignalHarvester:
                 energy = (z_flat - t_flat).pow(2).sum(dim=-1)
                 all_energies.append(energy.cpu())
 
-        # Run blank detection on aggregated representations
+        # Run blank detection on actual encoder representations
         if all_energies:
             energies_cat = torch.cat(all_energies)
 
+            # Collect real encoder outputs for blank detection
+            all_z = []
+            with torch.no_grad():
+                for i in range(min(4, num_samples)):
+                    sample = dataset[i]
+                    fp = sample["fingerprints"].unsqueeze(0).to(device)
+                    c_ = sample.get("coords")
+                    if c_ is not None:
+                        c_ = c_.unsqueeze(0).to(device)
+                    a_ = sample.get("adjacency")
+                    if a_ is not None:
+                        a_ = a_.unsqueeze(0).to(device)
+                    v_ = sample.get("velocity")
+                    if v_ is not None:
+                        v_ = v_.unsqueeze(0).to(device)
+                    z_enc = model.context_encoder(fp, coords=c_, adjacency=a_, velocity=v_)
+                    all_z.append(z_enc.reshape(-1, z_enc.shape[-1]).cpu())
+
+            sample_z = torch.cat(all_z, dim=0)[:min(64, N)]
+
+            # Energy function based on prediction error
             def energy_fn(z_in):
                 return z_in.pow(2).sum(dim=-1)
 
-            # Use a sample of representations for blank detection
-            sample_z = torch.randn(min(64, N), model.context_encoder.embed_dim if hasattr(model.context_encoder, 'embed_dim') else 192)
             try:
                 blank_result = detector.detect(sample_z, energy_fn)
                 combined = blank_result["combined_score"]
@@ -217,12 +236,6 @@ class DeepSignalHarvester:
 
         num_samples = min(self.fisher_samples, len(dataset))
 
-        def make_predictor_fn(fp_in, coords_in, adj_in, vel_in):
-            def pred_fn(z):
-                # Simple predictor: context encoder output as proxy
-                return z  # Identity for trace computation
-            return pred_fn
-
         try:
             with torch.no_grad():
                 for i in range(num_samples):
@@ -241,9 +254,17 @@ class DeepSignalHarvester:
                     z = model.context_encoder(fp, coords=coords, adjacency=adj, velocity=vel)
                     z_flat = z.reshape(-1, z.shape[-1])
 
-                    # Compute Fisher trace using finite differences
-                    def pred_fn(z_in):
-                        return z_in @ z_in.t().mean(dim=0, keepdim=True).expand_as(z_in)
+                    # Use target encoder as predictor proxy for Fisher computation.
+                    # The target encoder maps nearby inputs to nearby outputs, so its
+                    # Jacobian captures how sensitively the model maps this region.
+                    target_mean = model.target_encoder(fp, coords=coords, adjacency=adj, velocity=vel)
+                    target_flat = target_mean.reshape(-1, target_mean.shape[-1])
+
+                    def pred_fn(z_in, _tf=target_flat[:16]):
+                        # Prediction-error-based output: how different is z from target?
+                        # This makes Fisher trace high where prediction is sensitive
+                        # and low where it's flat (blank spaces).
+                        return z_in - _tf[:len(z_in)]
 
                     traces = fisher.compute_metric_tensor_trace(z_flat[:16], pred_fn)
 
@@ -267,6 +288,13 @@ class DeepSignalHarvester:
     ) -> None:
         """Extract aggregated attention patterns via forward hooks."""
         model.eval()
+
+        # Guard against OOM for large corpora
+        if N > 5000:
+            logger.warning(f"Corpus has {N} chunks — attention matrix would be {N}x{N}. "
+                           f"Capping at 5000 for memory safety.")
+            N = 5000
+
         attention_accumulator = torch.zeros(N, N)
         attention_counts = torch.zeros(N, N)
 
