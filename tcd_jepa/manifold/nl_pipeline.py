@@ -199,6 +199,7 @@ class NLIntelligencePipeline:
         documents: list[dict],
         use_tcd: bool = True,
         num_epochs: Optional[int] = None,
+        oracle_context=None,
     ) -> InsightReport:
         """Full pipeline: documents → intelligence report.
 
@@ -206,6 +207,7 @@ class NLIntelligencePipeline:
             documents: List of dicts with 'text' (required), 'id', 'title', 'timestamp'.
             use_tcd: Enable TCD crystallization for topological insights.
             num_epochs: Override training epochs (None = use config).
+            oracle_context: Optional OracleContext for Oracle mode output.
 
         Returns:
             InsightReport with all insights and KPIs.
@@ -301,6 +303,10 @@ class NLIntelligencePipeline:
             coords=self.corpus.coords,
             velocity=self.corpus.velocity,
         )
+
+        # Attach Oracle context if provided
+        if oracle_context is not None:
+            report.oracle_context = oracle_context
 
         elapsed = time.time() - t0
         logger.info(f"Pipeline complete in {elapsed:.1f}s — "

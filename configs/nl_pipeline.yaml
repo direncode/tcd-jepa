@@ -92,6 +92,24 @@ divergent:
   counterfactual_top_k: 5        # top-k insights for counterfactual analysis
   remove_pct: 0.05               # fraction of anomalous chunks to remove
 
+# Oracle operational intelligence (multi-lens business briefings)
+oracle:
+  enabled: false                   # enable via --oracle CLI flag
+  default_lenses:                  # which lenses to include by default
+    - revenue
+    - operational
+    - risk
+    - strategic
+    - customer
+    - competitive
+    - data
+  context:
+    domain: business               # business domain (retail, healthcare, fintech, etc.)
+    entity_type: segment           # what clusters represent (customer segment, product line, etc.)
+    actor: your team               # who should act on insights
+    resource_noun: resources       # what to allocate (budget, headcount, etc.)
+    currency: value                # value metric (revenue, ARR, deal count, etc.)
+
 # Scale settings
 scale:
   similarity_batch_size: 1000    # batch size for top-k cosine similarity

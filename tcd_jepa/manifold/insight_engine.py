@@ -114,6 +114,7 @@ class InsightReport:
     num_clusters: int
     num_links: int
     lineage_graph: Optional[LineageGraph] = None
+    oracle_context: Optional[object] = None  # OracleContext when Oracle mode is active
 
     def export_lineage(self, insight_id: str) -> dict:
         """Export full lineage chain for a specific insight."""
@@ -133,8 +134,28 @@ class InsightReport:
                     pairs.append(pair)
         return pairs
 
-    def to_nl(self) -> str:
-        """Render full report as natural language."""
+    def to_nl(self, mode: str = "technical") -> str:
+        """Render full report as natural language.
+
+        Args:
+            mode: Output mode. Options:
+                - "technical": Original technical report (default)
+                - "oracle": Full Oracle multi-lens briefing (all 7 lenses)
+                - A specific lens name (e.g. "revenue", "risk"): single lens only
+        """
+        # Oracle mode: delegate to OracleIntelligenceEngine
+        if mode != "technical":
+            from tcd_jepa.manifold.oracle_intelligence import (
+                OracleIntelligenceEngine, OracleContext, ALL_LENSES,
+            )
+            ctx = self.oracle_context if self.oracle_context else OracleContext()
+            engine = OracleIntelligenceEngine()
+            if mode == "oracle":
+                return engine.render_briefing(self, ctx)
+            elif mode in ALL_LENSES:
+                return engine.render_briefing(self, ctx, lenses=[mode])
+            # Fall through to technical if mode is unrecognized
+
         lines = []
         lines.append("=" * 70)
         lines.append("COMMERCIAL INTELLIGENCE REPORT")

@@ -85,6 +85,27 @@ def main():
     output_group.add_argument("--no-deep-signals", action="store_true",
                               help="Disable deep signal harvesting for faster runs")
 
+    # Oracle intelligence mode
+    oracle_group = parser.add_argument_group("Oracle Intelligence")
+    oracle_group.add_argument("--oracle", action="store_true",
+                              help="Enable Oracle mode — 7-lens operational intelligence briefing")
+    oracle_group.add_argument("--lens",
+                              choices=["revenue", "operational", "risk", "strategic",
+                                       "customer", "competitive", "data"],
+                              help="Render a single intelligence lens (implies --oracle)")
+    oracle_group.add_argument("--domain", default="business",
+                              help="Business domain (e.g. retail, healthcare, fintech)")
+    oracle_group.add_argument("--entity-type", default="segment",
+                              help="What clusters represent (e.g. 'customer segment', 'product line')")
+    oracle_group.add_argument("--actor", default="your team",
+                              help="Who should act (e.g. 'sales team', 'product team')")
+    oracle_group.add_argument("--resource-noun", default="resources",
+                              help="What to allocate (e.g. 'budget', 'headcount')")
+    oracle_group.add_argument("--currency", default="value",
+                              help="Value metric (e.g. 'revenue', 'ARR', 'deal count')")
+    oracle_group.add_argument("--cluster-labels", default=None,
+                              help="JSON mapping of cluster IDs to names (e.g. '{\"0\":\"Enterprise\"}')")
+
     args = parser.parse_args()
 
     if args.quiet:
@@ -119,6 +140,24 @@ def main():
         config.setdefault("deep_signals", {})["enabled"] = False
     elif args.deep_signals or args.tcd:
         config.setdefault("deep_signals", {})["enabled"] = True
+
+    # Oracle context
+    oracle_context = None
+    oracle_mode = None
+    if args.oracle or args.lens:
+        from tcd_jepa.manifold.oracle_intelligence import OracleContext
+        cluster_labels = {}
+        if args.cluster_labels:
+            cluster_labels = {int(k): v for k, v in json.loads(args.cluster_labels).items()}
+        oracle_context = OracleContext(
+            domain=args.domain,
+            entity_type=args.entity_type,
+            actor=args.actor,
+            resource_noun=args.resource_noun,
+            currency=args.currency,
+            cluster_labels=cluster_labels,
+        )
+        oracle_mode = args.lens if args.lens else "oracle"
 
     # Initialize pipeline
     from tcd_jepa.manifold.nl_pipeline import NLIntelligencePipeline
@@ -174,12 +213,14 @@ def main():
     if documents is not None:
         report = pipeline.analyze_documents(
             documents, use_tcd=args.tcd, num_epochs=args.epochs,
+            oracle_context=oracle_context,
         )
     else:
         # Corpus already loaded, train and generate insights
         report = pipeline.analyze_documents(
             [{"text": c.text, "id": c.doc_id} for c in pipeline.corpus.chunks[:50]],
             use_tcd=args.tcd, num_epochs=args.epochs,
+            oracle_context=oracle_context,
         )
 
     # Output
@@ -220,7 +261,7 @@ def main():
         }
         print(json.dumps(output, indent=2, default=str))
     else:
-        print(report.to_nl())
+        print(report.to_nl(mode=oracle_mode or "technical"))
 
     # Save outputs
     if args.output:
@@ -228,8 +269,10 @@ def main():
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # Save NL report
-        with open(out_dir / "intelligence_report.txt", "w") as f:
-            f.write(report.to_nl())
+        report_mode = oracle_mode or "technical"
+        filename = "oracle_briefing.txt" if oracle_mode else "intelligence_report.txt"
+        with open(out_dir / filename, "w") as f:
+            f.write(report.to_nl(mode=report_mode))
 
         # Save JSON
         with open(out_dir / "intelligence_report.json", "w") as f:
