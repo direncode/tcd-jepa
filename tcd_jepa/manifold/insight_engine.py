@@ -140,19 +140,35 @@ class InsightReport:
         Args:
             mode: Output mode. Options:
                 - "technical": Original technical report (default)
-                - "oracle": Full Oracle multi-lens briefing (all 7 lenses)
-                - A specific lens name (e.g. "revenue", "risk"): single lens only
+                - "oracle": Full Oracle multi-lens briefing (core 7 lenses)
+                - "oracle:all": Oracle briefing with ALL available lenses (30+)
+                - "oracle:auto": Oracle briefing with auto-generated lenses from data
+                - A specific lens name (e.g. "revenue", "risk", "fraud", "clinical"):
+                  single lens briefing (works with any of 30+ built-in lenses)
+                - Comma-separated lens names (e.g. "revenue,risk,fraud"):
+                  multi-lens briefing with selected lenses
         """
         # Oracle mode: delegate to OracleIntelligenceEngine
         if mode != "technical":
             from tcd_jepa.manifold.oracle_intelligence import (
-                OracleIntelligenceEngine, OracleContext, ALL_LENSES,
+                OracleIntelligenceEngine, OracleContext,
             )
             ctx = self.oracle_context if self.oracle_context else OracleContext()
             engine = OracleIntelligenceEngine()
+
             if mode == "oracle":
                 return engine.render_briefing(self, ctx)
-            elif mode in ALL_LENSES:
+            elif mode == "oracle:all":
+                return engine.render_briefing(self, ctx, lenses=engine.available_lenses)
+            elif mode == "oracle:auto":
+                return engine.render_briefing(self, ctx, include_auto=True)
+            elif "," in mode:
+                # Multi-lens selection: "revenue,risk,fraud"
+                selected = [l.strip() for l in mode.split(",")]
+                return engine.render_briefing(self, ctx, lenses=selected)
+            elif mode == "catalog":
+                return engine.render_lens_catalog()
+            elif engine.get_lens(mode):
                 return engine.render_briefing(self, ctx, lenses=[mode])
             # Fall through to technical if mode is unrecognized
 

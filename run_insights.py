@@ -88,13 +88,19 @@ def main():
     # Oracle intelligence mode
     oracle_group = parser.add_argument_group("Oracle Intelligence")
     oracle_group.add_argument("--oracle", action="store_true",
-                              help="Enable Oracle mode — 7-lens operational intelligence briefing")
-    oracle_group.add_argument("--lens",
-                              choices=["revenue", "operational", "risk", "strategic",
-                                       "customer", "competitive", "data"],
-                              help="Render a single intelligence lens (implies --oracle)")
+                              help="Enable Oracle mode — core 7-lens operational intelligence briefing")
+    oracle_group.add_argument("--oracle-all", action="store_true",
+                              help="Oracle mode with ALL 30+ available lenses")
+    oracle_group.add_argument("--oracle-auto", action="store_true",
+                              help="Oracle mode with auto-generated lenses from data")
+    oracle_group.add_argument("--lens", nargs="+",
+                              help="Specific lens(es) to render (e.g. --lens revenue fraud clinical)")
+    oracle_group.add_argument("--list-lenses", action="store_true",
+                              help="Print all available intelligence lenses and exit")
     oracle_group.add_argument("--domain", default="business",
                               help="Business domain (e.g. retail, healthcare, fintech)")
+    oracle_group.add_argument("--suggest-lenses", action="store_true",
+                              help="Suggest relevant lenses for the specified --domain")
     oracle_group.add_argument("--entity-type", default="segment",
                               help="What clusters represent (e.g. 'customer segment', 'product line')")
     oracle_group.add_argument("--actor", default="your team",
@@ -141,10 +147,26 @@ def main():
     elif args.deep_signals or args.tcd:
         config.setdefault("deep_signals", {})["enabled"] = True
 
+    # List/suggest lenses (no data needed)
+    if args.list_lenses:
+        from tcd_jepa.manifold.oracle_intelligence import OracleIntelligenceEngine
+        print(OracleIntelligenceEngine().render_lens_catalog())
+        sys.exit(0)
+    if args.suggest_lenses:
+        from tcd_jepa.manifold.oracle_intelligence import OracleIntelligenceEngine
+        engine = OracleIntelligenceEngine()
+        suggested = engine.list_lenses_for_domain(args.domain)
+        print(f"Suggested lenses for '{args.domain}':")
+        for name in suggested:
+            lens = engine.get_lens(name)
+            if lens:
+                print(f"  {name:<20} {lens.title}")
+        sys.exit(0)
+
     # Oracle context
     oracle_context = None
     oracle_mode = None
-    if args.oracle or args.lens:
+    if args.oracle or args.oracle_all or args.oracle_auto or args.lens:
         from tcd_jepa.manifold.oracle_intelligence import OracleContext
         cluster_labels = {}
         if args.cluster_labels:
@@ -157,7 +179,14 @@ def main():
             currency=args.currency,
             cluster_labels=cluster_labels,
         )
-        oracle_mode = args.lens if args.lens else "oracle"
+        if args.oracle_all:
+            oracle_mode = "oracle:all"
+        elif args.oracle_auto:
+            oracle_mode = "oracle:auto"
+        elif args.lens:
+            oracle_mode = ",".join(args.lens) if len(args.lens) > 1 else args.lens[0]
+        else:
+            oracle_mode = "oracle"
 
     # Initialize pipeline
     from tcd_jepa.manifold.nl_pipeline import NLIntelligencePipeline

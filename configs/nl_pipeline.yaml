@@ -92,10 +92,11 @@ divergent:
   counterfactual_top_k: 5        # top-k insights for counterfactual analysis
   remove_pct: 0.05               # fraction of anomalous chunks to remove
 
-# Oracle operational intelligence (multi-lens business briefings)
+# Oracle universal operationalizer (unlimited intelligence lenses)
+# 38 built-in lenses + unlimited custom lenses + auto-generated lenses
 oracle:
   enabled: false                   # enable via --oracle CLI flag
-  default_lenses:                  # which lenses to include by default
+  default_lenses:                  # core 7 lenses (--oracle). Use --oracle-all for all 38
     - revenue
     - operational
     - risk
@@ -103,6 +104,12 @@ oracle:
     - customer
     - competitive
     - data
+  # Extended lenses available via --lens: compliance, innovation, talent, supply_chain,
+  # financial, security, product, marketing, partnership, quality, sustainability,
+  # clinical, pricing, fraud, geopolitical, brand, infrastructure, knowledge_management,
+  # m_and_a, investor_relations, vendor, cx, legal, ecommerce, real_estate, media,
+  # education, defense, philanthropy, climate, research
+  # Use --list-lenses to see all, --suggest-lenses --domain <X> for recommendations
   context:
     domain: business               # business domain (retail, healthcare, fintech, etc.)
     entity_type: segment           # what clusters represent (customer segment, product line, etc.)
