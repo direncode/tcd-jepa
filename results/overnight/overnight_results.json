@@ -1,0 +1,12 @@
+[
+  {
+    "phase": "tcd_300",
+    "linear_probe_acc": 72.96,
+    "knn_k1": 58.2,
+    "knn_k5": 61.26,
+    "knn_k20": 62.82,
+    "train_time_s": 3027.51,
+    "total_time_s": 3027.51,
+    "total_epochs": 300
+  }
+]
