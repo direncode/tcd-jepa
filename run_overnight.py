@@ -55,8 +55,10 @@ PHASES = [
     {"name": "tcd_1900", "epochs": 1000, "lr": 0.0007, "warmup": 15,  "use_tcd": True},
 ]
 
-RESULTS_DIR = Path("./logs/overnight/results")
-CHECKPOINT_DIR = Path("./logs/overnight/checkpoints")
+# Use /workspace for persistent storage on RunPod (survives container restarts)
+_persist = Path("/workspace") if Path("/workspace").exists() else Path(".")
+RESULTS_DIR = _persist / "logs/overnight/results"
+CHECKPOINT_DIR = _persist / "logs/overnight/checkpoints"
 
 
 def get_ssl_dataloader(batch_size, mask_collator):
