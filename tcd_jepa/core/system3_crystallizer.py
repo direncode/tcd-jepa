@@ -134,17 +134,22 @@ class ModuleCrystallizer:
         self.registry.update_performance(module_id, loss, epoch)
 
     def _has_similar_module(self, feature: TopologicalFeature) -> bool:
-        """Check if a module covering a similar topological feature already exists."""
+        """Check if a near-duplicate module already exists.
+
+        Only filters features that are almost identical (>85% overlap)
+        to avoid the churn of re-creating the same module each step,
+        while still allowing genuinely distinct features through.
+        """
         for _, record in self.registry._modules.items():
             existing = record.feature
             if existing.module_type != feature.module_type:
                 continue
-            # Same type — check if birth/death intervals overlap significantly
+            # Same type — check if birth/death intervals are near-identical
             overlap_start = max(existing.birth, feature.birth)
             overlap_end = min(existing.death, feature.death)
             overlap = max(0.0, overlap_end - overlap_start)
             min_persistence = min(existing.persistence, feature.persistence)
-            if min_persistence > 0 and overlap / min_persistence > 0.5:
+            if min_persistence > 0 and overlap / min_persistence > 0.85:
                 return True
         return False
 
