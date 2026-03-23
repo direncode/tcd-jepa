@@ -1,192 +1,57 @@
 # ============================================================================
-# TCD-JEPA H100 RunPod Configuration — 12-Hour Maximum Value Run
+# TCD-JEPA H100 RunPod Configuration — ViT-Small (Phase 1)
 # ============================================================================
 # Optimized for: NVIDIA H100 80GB SXM5
-# Target: Extract maximum scientific evidence in 12 hours
-# Strategy: Multi-scale experiments with thorough evaluation
+# ViT-Small: 300 epochs, batch 512, BF16
 # ============================================================================
 
-# --- Experiment Plan ---
-# Phase 1 (0-4h):   ViT-Small  300ep x 5 seeds — fast, statistical significance
-# Phase 2 (4-9h):   ViT-Base   200ep x 3 seeds — scale validation
-# Phase 3 (9-12h):  ViT-Large  100ep x 2 seeds — scale frontier
+model:
+  encoder:
+    img_size: 32
+    patch_size: 4
+    in_chans: 3
+    embed_dim: 384
+    depth: 12
+    num_heads: 6
+    mlp_ratio: 4.0
+  predictor:
+    predictor_embed_dim: 192
+    predictor_depth: 6
+    num_heads: 6
+  ema:
+    start: 0.996
+    end: 1.0
 
-experiments:
-  # Phase 1: Statistical significance at small scale
-  small:
-    model:
-      encoder:
-        img_size: 32
-        patch_size: 4
-        in_chans: 3
-        embed_dim: 384
-        depth: 12
-        num_heads: 6
-        mlp_ratio: 4.0
-      predictor:
-        predictor_embed_dim: 192
-        predictor_depth: 6
-        num_heads: 6
-      ema:
-        start: 0.996
-        end: 1.0
-    training:
-      epochs: 300
-      batch_size: 512
-      learning_rate: 0.0015
-      start_lr: 0.0001
-      final_lr: 0.000001
-      weight_decay: 0.05
-      final_weight_decay: 0.4
-      warmup_epochs: 30
-      optimizer: adamw
-      use_bfloat16: true
-      grad_clip_norm: 1.0
-      checkpoint_freq: 50
-      seed: 42
-      compile: true
-    data:
-      dataset: cifar10
-      img_size: 32
-      num_workers: 8
-      data_dir: ./data
-      pin_memory: true
-      persistent_workers: true
-      prefetch_factor: 4
-    masking:
-      num_enc_masks: 4
-      num_pred_masks: 1
-      min_keep: 4
-      enc_mask_scale: [0.15, 0.2]
-      pred_mask_scale: [0.2, 0.4]
-      aspect_ratio: [0.75, 1.5]
-    seeds: [42, 123, 456, 789, 1024]
+training:
+  epochs: 300
+  batch_size: 512
+  learning_rate: 0.0015
+  start_lr: 0.0001
+  final_lr: 0.000001
+  weight_decay: 0.05
+  final_weight_decay: 0.4
+  warmup_epochs: 30
+  optimizer: adamw
+  use_bfloat16: true
+  grad_clip_norm: 1.0
+  checkpoint_freq: 50
+  seed: 42
 
-  # Phase 2: Scale validation
-  base:
-    model:
-      encoder:
-        img_size: 32
-        patch_size: 4
-        in_chans: 3
-        embed_dim: 768
-        depth: 12
-        num_heads: 12
-        mlp_ratio: 4.0
-      predictor:
-        predictor_embed_dim: 384
-        predictor_depth: 6
-        num_heads: 12
-      ema:
-        start: 0.996
-        end: 1.0
-    training:
-      epochs: 200
-      batch_size: 256
-      learning_rate: 0.001
-      start_lr: 0.0001
-      final_lr: 0.000001
-      weight_decay: 0.05
-      final_weight_decay: 0.4
-      warmup_epochs: 20
-      optimizer: adamw
-      use_bfloat16: true
-      grad_clip_norm: 1.0
-      checkpoint_freq: 50
-      seed: 42
-      compile: true
-    data:
-      dataset: cifar10
-      img_size: 32
-      num_workers: 8
-      data_dir: ./data
-      pin_memory: true
-      persistent_workers: true
-      prefetch_factor: 4
-    masking:
-      num_enc_masks: 4
-      num_pred_masks: 1
-      min_keep: 4
-      enc_mask_scale: [0.15, 0.2]
-      pred_mask_scale: [0.2, 0.4]
-      aspect_ratio: [0.75, 1.5]
-    seeds: [42, 123, 456]
+data:
+  dataset: cifar10
+  img_size: 32
+  num_workers: 8
+  data_dir: ./data
 
-  # Phase 3: Scale frontier
-  large:
-    model:
-      encoder:
-        img_size: 32
-        patch_size: 4
-        in_chans: 3
-        embed_dim: 1024
-        depth: 24
-        num_heads: 16
-        mlp_ratio: 4.0
-      predictor:
-        predictor_embed_dim: 512
-        predictor_depth: 8
-        num_heads: 16
-      ema:
-        start: 0.996
-        end: 1.0
-    training:
-      epochs: 100
-      batch_size: 128
-      learning_rate: 0.0008
-      start_lr: 0.0001
-      final_lr: 0.000001
-      weight_decay: 0.05
-      final_weight_decay: 0.4
-      warmup_epochs: 15
-      optimizer: adamw
-      use_bfloat16: true
-      grad_clip_norm: 1.0
-      checkpoint_freq: 25
-      seed: 42
-      compile: true
-    data:
-      dataset: cifar10
-      img_size: 32
-      num_workers: 8
-      data_dir: ./data
-      pin_memory: true
-      persistent_workers: true
-      prefetch_factor: 4
-    masking:
-      num_enc_masks: 4
-      num_pred_masks: 1
-      min_keep: 4
-      enc_mask_scale: [0.15, 0.2]
-      pred_mask_scale: [0.2, 0.4]
-      aspect_ratio: [0.75, 1.5]
-    seeds: [42, 123]
+masking:
+  num_enc_masks: 4
+  num_pred_masks: 1
+  min_keep: 4
+  enc_mask_scale: [0.15, 0.2]
+  pred_mask_scale: [0.2, 0.4]
+  aspect_ratio: [0.75, 1.5]
 
-# --- Evaluation Configuration ---
-evaluation:
-  linear_probe:
-    epochs: 100
-    lr: 0.01
-    batch_size: 512
-  knn:
-    k_values: [1, 5, 10, 20]
-  representation:
-    compute_effective_rank: true
-    compute_uniformity: true
-    compute_centered_kernel_alignment: true
-
-# --- Logging ---
 logging:
-  use_wandb: true
+  use_wandb: false
   wandb_project: tcd-jepa-h100
-  wandb_entity: null  # Set via env var WANDB_ENTITY
   log_dir: ./logs/h100_run
-  save_loss_curves: true
-  log_every_n_steps: 10
-
-# --- H100 Hardware Optimizations ---
-hardware:
-  cuda_tf32: true
-  cudnn_benchmark: true
-  compile_mode: "reduce-overhead"  # Options: default, reduce-overhead, max-autotune
-  empty_cache_freq: 0  # 0 = disabled
