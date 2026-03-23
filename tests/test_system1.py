@@ -52,7 +52,7 @@ class TestContextEncoder:
     def test_collects_layer_stats(self):
         """ContextEncoder records statistics for each layer."""
         vit = VisionTransformer(img_size=[32], patch_size=4, embed_dim=64, depth=3, num_heads=2)
-        encoder = ContextEncoder(vit)
+        encoder = ContextEncoder(vit, collect_stats=True)
         x = torch.randn(2, 3, 32, 32)
         encoder(x)
         stats = encoder.get_layer_stats()
@@ -65,7 +65,7 @@ class TestContextEncoder:
     def test_clear_stats(self):
         """Stats are cleared between forward passes."""
         vit = VisionTransformer(img_size=[32], patch_size=4, embed_dim=64, depth=2, num_heads=2)
-        encoder = ContextEncoder(vit)
+        encoder = ContextEncoder(vit, collect_stats=True)
         x = torch.randn(2, 3, 32, 32)
         encoder(x)
         assert len(encoder.get_layer_stats()) == 2

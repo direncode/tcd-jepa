@@ -161,23 +161,42 @@ class Trainer:
         Returns:
             Tuple of (loss_value, learning_rate, weight_decay, momentum).
         """
-        # Move data to device
-        images = images.to(self.device)
-        masks_enc = [m.to(self.device) for m in masks_enc]
-        masks_pred = [m.to(self.device) for m in masks_pred]
+        # Move data to device (non_blocking for overlap with compute)
+        images = images.to(self.device, non_blocking=True)
+        masks_enc = [m.to(self.device, non_blocking=True) for m in masks_enc]
+        masks_pred = [m.to(self.device, non_blocking=True) for m in masks_pred]
 
-        # Forward pass
-        result = self.model(images, masks_enc, masks_pred)
-        loss = result["loss"]
+        use_amp = self.cfg.get("training", {}).get("use_bfloat16", False)
+        amp_dtype = torch.bfloat16 if use_amp else None
+        grad_clip = self.cfg.get("training", {}).get("grad_clip_norm", 0.0)
+
+        # Forward pass with optional AMP
+        self.optimizer.zero_grad(set_to_none=True)  # Faster than zero_grad()
+
+        if use_amp:
+            with torch.amp.autocast("cuda", dtype=amp_dtype):
+                result = self.model(images, masks_enc, masks_pred)
+                loss = result["loss"]
+        else:
+            result = self.model(images, masks_enc, masks_pred)
+            loss = result["loss"]
 
         # Backward pass
-        self.optimizer.zero_grad()
         if self.scaler is not None:
             self.scaler.scale(loss).backward()
+            if grad_clip > 0:
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), grad_clip
+                )
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
             loss.backward()
+            if grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), grad_clip
+                )
             self.optimizer.step()
 
         # Update schedules

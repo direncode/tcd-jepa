@@ -108,6 +108,7 @@ def build_tcd_jepa(
     predictor_depth: int = 6,
     predictor_num_heads: int = 6,
     use_dynamic_predictor: bool = False,
+    collect_encoder_stats: bool = False,
 ) -> TCDJEPAModel:
     """Build a TCD-JEPA model from hyperparameters.
 
@@ -142,7 +143,7 @@ def build_tcd_jepa(
     )
 
     # Wrap in context encoder (System 1)
-    context_encoder = ContextEncoder(encoder)
+    context_encoder = ContextEncoder(encoder, collect_stats=collect_encoder_stats)
 
     # Create EMA target encoder
     target_encoder = TargetEncoder(encoder)

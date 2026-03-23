@@ -20,13 +20,15 @@ class ContextEncoder(nn.Module):
     exploration decisions in later phases.
     """
 
-    def __init__(self, encoder: VisionTransformer):
+    def __init__(self, encoder: VisionTransformer, collect_stats: bool = False):
         super().__init__()
         self.encoder = encoder
+        self.collect_stats = collect_stats
         # Statistics collected during forward pass
         self._layer_stats: list[dict[str, torch.Tensor]] = []
         self._hooks: list[torch.utils.hooks.RemovableHook] = []
-        self._register_hooks()
+        if collect_stats:
+            self._register_hooks()
 
     @property
     def embed_dim(self) -> int:
@@ -82,7 +84,8 @@ class ContextEncoder(nn.Module):
         Returns:
             Encoded patch representations.
         """
-        self._layer_stats.clear()
+        if self.collect_stats:
+            self._layer_stats.clear()
         return self.encoder(x, masks=masks)
 
     def parameters(self, recurse: bool = True):

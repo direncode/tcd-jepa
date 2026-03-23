@@ -273,6 +273,8 @@ def get_ssl_dataloader(batch_size, mask_collator, num_workers=2, data_dir="./dat
     return DataLoader(
         dataset, batch_size=batch_size, shuffle=True,
         num_workers=num_workers, collate_fn=mask_collator, drop_last=True,
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=num_workers > 0,
     )
 
 
