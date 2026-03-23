@@ -38,7 +38,7 @@ class ModuleRegistry:
     def __init__(
         self,
         max_modules: int = 20,
-        pruning_patience: int = 10,
+        pruning_patience: int = 25,
         min_improvement: float = 0.01,
     ) -> None:
         self.max_modules = max_modules

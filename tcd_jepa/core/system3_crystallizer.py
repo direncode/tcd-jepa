@@ -12,7 +12,7 @@ import torch.nn as nn
 
 from tcd_jepa.topology.persistent_homology import PersistentHomologyComputer
 from tcd_jepa.topology.persistence_diagrams import PersistenceDiagramAnalyzer
-from tcd_jepa.topology.feature_extraction import TopologicalFeatureExtractor
+from tcd_jepa.topology.feature_extraction import TopologicalFeatureExtractor, TopologicalFeature
 from tcd_jepa.modules.module_factory import ModuleFactory
 from tcd_jepa.modules.module_registry import ModuleRegistry
 
@@ -92,8 +92,14 @@ class ModuleCrystallizer:
         )
 
         # Step 4: Create and register modules for significant features
+        # Skip features that already have a similar module registered to avoid
+        # the register-then-prune churn that caps effective module count.
         new_modules = []
         for feature in features:
+            if self.registry.num_modules >= self.registry.max_modules:
+                break
+            if self._has_similar_module(feature):
+                continue
             module = self.module_factory.create_module(feature, self.device)
             module_id = self.registry.register(module, feature, epoch)
             new_modules.append((module_id, feature.module_type))
@@ -126,6 +132,21 @@ class ModuleCrystallizer:
     ) -> None:
         """Update a module's performance tracking."""
         self.registry.update_performance(module_id, loss, epoch)
+
+    def _has_similar_module(self, feature: TopologicalFeature) -> bool:
+        """Check if a module covering a similar topological feature already exists."""
+        for _, record in self.registry._modules.items():
+            existing = record.feature
+            if existing.module_type != feature.module_type:
+                continue
+            # Same type — check if birth/death intervals overlap significantly
+            overlap_start = max(existing.birth, feature.birth)
+            overlap_end = min(existing.death, feature.death)
+            overlap = max(0.0, overlap_end - overlap_start)
+            min_persistence = min(existing.persistence, feature.persistence)
+            if min_persistence > 0 and overlap / min_persistence > 0.5:
+                return True
+        return False
 
     @property
     def num_modules(self) -> int:
