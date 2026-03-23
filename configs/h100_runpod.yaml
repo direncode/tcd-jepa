@@ -1,55 +1,151 @@
 # ============================================================================
-# TCD-JEPA H100 RunPod Configuration — ViT-Small (Phase 1)
+# TCD-JEPA H100 RunPod Benchmark Configuration
 # ============================================================================
+# Multi-scale experiments: ViT-S (4h), ViT-B (5h), ViT-L (3h) = 12h total
 # Optimized for: NVIDIA H100 80GB SXM5
-# ViT-Small: 300 epochs, batch 512, BF16
 # ============================================================================
 
-model:
-  encoder:
-    img_size: 32
-    patch_size: 4
-    in_chans: 3
-    embed_dim: 384
-    depth: 12
-    num_heads: 6
-    mlp_ratio: 4.0
-  predictor:
-    predictor_embed_dim: 192
-    predictor_depth: 6
-    num_heads: 6
-  ema:
-    start: 0.996
-    end: 1.0
+experiments:
+  # ── Phase 1: ViT-Small (3 seeds × 2 methods × 300 epochs ≈ 4h) ──────────
+  small:
+    seeds: [42, 123, 7]
+    model:
+      encoder:
+        img_size: 32
+        patch_size: 4
+        in_chans: 3
+        embed_dim: 384
+        depth: 12
+        num_heads: 6
+        mlp_ratio: 4.0
+      predictor:
+        predictor_embed_dim: 192
+        predictor_depth: 6
+        num_heads: 6
+      ema:
+        start: 0.996
+        end: 1.0
+    training:
+      epochs: 300
+      batch_size: 512
+      learning_rate: 0.0015
+      start_lr: 0.0001
+      final_lr: 0.000001
+      weight_decay: 0.05
+      final_weight_decay: 0.4
+      warmup_epochs: 30
+      optimizer: adamw
+      use_bfloat16: true
+      grad_clip_norm: 1.0
+      checkpoint_freq: 50
+    data:
+      dataset: cifar10
+      img_size: 32
+      num_workers: 8
+      pin_memory: true
+      persistent_workers: true
+      prefetch_factor: 4
+    masking:
+      num_enc_masks: 4
+      num_pred_masks: 1
+      min_keep: 4
+      enc_mask_scale: [0.15, 0.2]
+      pred_mask_scale: [0.2, 0.4]
+      aspect_ratio: [0.75, 1.5]
 
-training:
-  epochs: 300
-  batch_size: 512
-  learning_rate: 0.0015
-  start_lr: 0.0001
-  final_lr: 0.000001
-  weight_decay: 0.05
-  final_weight_decay: 0.4
-  warmup_epochs: 30
-  optimizer: adamw
-  use_bfloat16: true
-  grad_clip_norm: 1.0
-  checkpoint_freq: 50
-  seed: 42
+  # ── Phase 2: ViT-Base (2 seeds × 2 methods × 200 epochs ≈ 5h) ──────────
+  base:
+    seeds: [42, 123]
+    model:
+      encoder:
+        img_size: 32
+        patch_size: 4
+        in_chans: 3
+        embed_dim: 768
+        depth: 12
+        num_heads: 12
+        mlp_ratio: 4.0
+      predictor:
+        predictor_embed_dim: 384
+        predictor_depth: 6
+        num_heads: 12
+      ema:
+        start: 0.996
+        end: 1.0
+    training:
+      epochs: 200
+      batch_size: 256
+      learning_rate: 0.001
+      start_lr: 0.0001
+      final_lr: 0.000001
+      weight_decay: 0.05
+      final_weight_decay: 0.4
+      warmup_epochs: 20
+      optimizer: adamw
+      use_bfloat16: true
+      grad_clip_norm: 1.0
+      checkpoint_freq: 50
+    data:
+      dataset: cifar10
+      img_size: 32
+      num_workers: 8
+      pin_memory: true
+      persistent_workers: true
+      prefetch_factor: 4
+    masking:
+      num_enc_masks: 4
+      num_pred_masks: 1
+      min_keep: 4
+      enc_mask_scale: [0.15, 0.2]
+      pred_mask_scale: [0.2, 0.4]
+      aspect_ratio: [0.75, 1.5]
 
-data:
-  dataset: cifar10
-  img_size: 32
-  num_workers: 8
-  data_dir: ./data
-
-masking:
-  num_enc_masks: 4
-  num_pred_masks: 1
-  min_keep: 4
-  enc_mask_scale: [0.15, 0.2]
-  pred_mask_scale: [0.2, 0.4]
-  aspect_ratio: [0.75, 1.5]
+  # ── Phase 3: ViT-Large (1 seed × 2 methods × 100 epochs ≈ 3h) ──────────
+  large:
+    seeds: [42]
+    model:
+      encoder:
+        img_size: 32
+        patch_size: 4
+        in_chans: 3
+        embed_dim: 1024
+        depth: 24
+        num_heads: 16
+        mlp_ratio: 4.0
+      predictor:
+        predictor_embed_dim: 512
+        predictor_depth: 8
+        num_heads: 16
+      ema:
+        start: 0.996
+        end: 1.0
+    training:
+      epochs: 100
+      batch_size: 128
+      learning_rate: 0.0008
+      start_lr: 0.00005
+      final_lr: 0.000001
+      weight_decay: 0.05
+      final_weight_decay: 0.4
+      warmup_epochs: 10
+      optimizer: adamw
+      use_bfloat16: true
+      grad_clip_norm: 1.0
+      checkpoint_freq: 25
+    data:
+      dataset: cifar10
+      img_size: 32
+      num_workers: 8
+      pin_memory: true
+      persistent_workers: true
+      prefetch_factor: 4
+    masking:
+      num_enc_masks: 4
+      num_pred_masks: 1
+      min_keep: 4
+      enc_mask_scale: [0.15, 0.2]
+      pred_mask_scale: [0.2, 0.4]
+      aspect_ratio: [0.75, 1.5]
 
 logging:
   use_wandb: false
