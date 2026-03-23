@@ -9,7 +9,9 @@ Examples:
 """
 
 import argparse
+import json
 import logging
+import time
 from pathlib import Path
 
 import numpy as np
@@ -211,6 +213,68 @@ def main():
 
     metric_logger.close()
     logger.info("Training complete")
+
+    # ── Post-training evaluation ──────────────────────────────────────────
+    if cfg.get("data", {}).get("dataset", "cifar10") == "cifar10":
+        logger.info("Running post-training evaluation (linear probe + k-NN)...")
+        try:
+            from experiments.benchmark_eval import (
+                extract_features, linear_probe, knn_evaluate, get_eval_loaders,
+            )
+
+            train_loader, test_loader, dataset_name = get_eval_loaders(
+                data_dir=cfg.get("data", {}).get("data_dir", "./data"),
+            )
+            logger.info(f"Evaluation dataset: {dataset_name}")
+
+            encoder = model.context_encoder
+            train_feats, train_labels = extract_features(encoder, train_loader, device)
+            test_feats, test_labels = extract_features(encoder, test_loader, device)
+            logger.info(f"Features: train={train_feats.shape}, test={test_feats.shape}")
+
+            embed_dim = enc_cfg["embed_dim"]
+
+            lin_acc = linear_probe(
+                train_feats, train_labels, test_feats, test_labels,
+                embed_dim=embed_dim, device=device,
+            )
+            logger.info(f"Linear probe accuracy: {lin_acc:.2f}%")
+
+            knn_results = knn_evaluate(
+                train_feats, train_labels, test_feats, test_labels,
+                device=device,
+            )
+            logger.info(f"k-NN results: {knn_results}")
+
+            # Save evaluation results
+            eval_results = {
+                "linear_probe_acc": lin_acc,
+                **knn_results,
+                "embed_dim": embed_dim,
+                "epochs": num_epochs,
+                "dataset": dataset_name,
+            }
+            results_dir = Path(log_dir) / "results"
+            results_dir.mkdir(parents=True, exist_ok=True)
+            results_path = results_dir / "eval_results.json"
+            with open(results_path, "w") as f:
+                json.dump(eval_results, f, indent=2)
+            logger.info(f"Evaluation results saved to {results_path}")
+
+            # Print summary
+            print("\n" + "=" * 60)
+            print("POST-TRAINING EVALUATION RESULTS")
+            print("=" * 60)
+            print(f"  Linear Probe:  {lin_acc:.2f}%")
+            for k, v in knn_results.items():
+                print(f"  {k}:  {v:.2f}%")
+            print(f"  Results saved: {results_path}")
+            print("=" * 60)
+
+        except Exception as e:
+            logger.error(f"Post-training evaluation failed: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 if __name__ == "__main__":
