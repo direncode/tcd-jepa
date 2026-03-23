@@ -10,6 +10,7 @@ Examples:
 
 import argparse
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -53,6 +54,50 @@ def build_dataloader(cfg: dict, mask_collator: MaskCollator) -> DataLoader:
             root=data_cfg.get("data_dir", "./data"),
             train=True, download=True, transform=transform,
         )
+
+        class DropLabel(torch.utils.data.Dataset):
+            def __init__(self, ds):
+                self.ds = ds
+            def __len__(self):
+                return len(self.ds)
+            def __getitem__(self, idx):
+                return self.ds[idx][0]
+
+        dataset = DropLabel(dataset)
+
+    elif dataset_name == "stl10":
+        transform = T.Compose([
+            T.Resize(img_size),
+            T.RandomResizedCrop(img_size, scale=(0.4, 1.0)),
+            T.RandomHorizontalFlip(),
+            T.ToTensor(),
+            T.Normalize((0.4467, 0.4398, 0.4066), (0.2603, 0.2566, 0.2713)),
+        ])
+        dataset = torchvision.datasets.STL10(
+            root=data_cfg.get("data_dir", "./data"),
+            split="train+unlabeled", download=True, transform=transform,
+        )
+
+        class DropLabel(torch.utils.data.Dataset):
+            def __init__(self, ds):
+                self.ds = ds
+            def __len__(self):
+                return len(self.ds)
+            def __getitem__(self, idx):
+                return self.ds[idx][0]
+
+        dataset = DropLabel(dataset)
+
+    elif dataset_name == "imagenet100":
+        from torchvision.datasets import ImageFolder
+        transform = T.Compose([
+            T.RandomResizedCrop(img_size, scale=(0.4, 1.0)),
+            T.RandomHorizontalFlip(),
+            T.ToTensor(),
+            T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ])
+        data_dir = data_cfg.get("data_dir", "./data/imagenet100")
+        dataset = ImageFolder(os.path.join(data_dir, "train"), transform=transform)
 
         class DropLabel(torch.utils.data.Dataset):
             def __init__(self, ds):

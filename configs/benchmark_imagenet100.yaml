@@ -1,0 +1,53 @@
+# ImageNet-100 benchmark with ViT-S/16 at 224px
+# ImageNet-100 is a 100-class subset of ImageNet-1k (~130k images).
+# This is THE benchmark reviewers want to see for "does it scale?"
+# ~22M params encoder, trains in ~8-12 hours on a single A100 (300ep).
+model:
+  encoder:
+    img_size: 224
+    patch_size: 16
+    in_chans: 3
+    embed_dim: 384
+    depth: 12
+    num_heads: 6
+    mlp_ratio: 4.0
+  predictor:
+    predictor_embed_dim: 192
+    predictor_depth: 6
+    num_heads: 6
+  ema:
+    start: 0.996
+    end: 1.0
+
+training:
+  epochs: 300
+  batch_size: 256
+  learning_rate: 0.001
+  start_lr: 0.0001
+  final_lr: 0.0
+  weight_decay: 0.05
+  final_weight_decay: 0.05
+  warmup_epochs: 40
+  optimizer: adamw
+  use_bfloat16: true
+  checkpoint_freq: 50
+  seed: 42
+
+data:
+  dataset: imagenet100
+  img_size: 224
+  num_workers: 8
+  data_dir: ./data/imagenet100
+
+masking:
+  num_enc_masks: 4
+  num_pred_masks: 1
+  min_keep: 10
+  enc_mask_scale: [0.85, 1.0]
+  pred_mask_scale: [0.15, 0.2]
+  aspect_ratio: [0.75, 1.5]
+
+logging:
+  use_wandb: true
+  wandb_project: tcd-jepa-benchmarks
+  log_dir: ./logs/benchmark_imagenet100
