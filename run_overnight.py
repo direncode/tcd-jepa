@@ -335,6 +335,13 @@ def main():
           f"({diff:+.2f}% vs vanilla)")
     print("=" * 70)
 
+    # Auto-shutdown pod to stop billing
+    import subprocess
+    logger.info("Training complete. Shutting down pod to stop billing...")
+    subprocess.run(["runpodctl", "stop", "pod"], capture_output=True)
+    # Fallback: direct shutdown if runpodctl not available
+    subprocess.run(["shutdown", "-h", "now"], capture_output=True)
+
 
 if __name__ == "__main__":
     main()
