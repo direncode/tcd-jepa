@@ -157,7 +157,7 @@ class RecursiveLoop:
         langevin_step_size: float = 0.01,
         langevin_temperature: float = 1.0,
         persistence_threshold: float = 0.3,
-        max_modules: int = 10,
+        max_modules: int = 32,
         device: torch.device = torch.device("cpu"),
     ) -> None:
         self.embed_dim = embed_dim

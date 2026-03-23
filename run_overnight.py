@@ -211,6 +211,7 @@ def run_phase(phase, model, device, mask_collator, prev_optimizer_state=None):
             explore_every=2,
             crystallize_every=5,
             langevin_steps=20,
+            max_modules=32,
             device=device,
         )
         stream_encoder = StreamEncoder(model.context_encoder, model.target_encoder)
