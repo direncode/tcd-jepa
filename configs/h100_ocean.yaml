@@ -1,0 +1,55 @@
+## TCD-JEPA with Ocean physics backend on H100
+model:
+  encoder:
+    fingerprint_dim: 384
+    num_tokens: 128
+    coord_dim: 3
+    embed_dim: 384
+    depth: 12
+    num_heads: 6
+    use_causal_encoding: true
+    use_velocity_encoding: true
+    sphere_radius: 4.5
+  predictor:
+    predictor_embed_dim: 192
+    predictor_depth: 6
+    num_heads: 6
+  ema:
+    momentum_start: 0.996
+    momentum_end: 1.0
+
+training:
+  epochs: 100
+  batch_size: 256
+  learning_rate: 0.0003
+  weight_decay: 0.05
+  optimizer: adamw
+  warmup_epochs: 10
+  use_bfloat16: true
+
+data:
+  dataset: latent_ocean
+  fingerprint_dim: 384
+  sphere_radius: 4.5
+
+tcd:
+  enabled: true
+  physics_backend: ocean
+  explore_every: 5
+  crystallize_every: 10
+  langevin_steps: 100
+  langevin_step_size: 0.005
+  persistence_threshold: 0.3
+  max_modules: 20
+  use_dynamic_predictor: true
+
+ocean:
+  shcg_base_dimension: 64
+  btut_l_max: 128
+  irdb_max_entities: 500000
+  embedding_model: all-MiniLM-L6-v2
+
+logging:
+  use_wandb: true
+  project: tcd-jepa-ocean
+  log_dir: ./logs

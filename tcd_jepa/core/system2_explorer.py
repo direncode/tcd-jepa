@@ -35,8 +35,10 @@ class EnergyExplorer:
         variance_threshold: float = 1.0,
         perturbation_std: float = 0.01,
         max_trajectories: int = 100,
+        backend=None,
     ) -> None:
         self.embed_dim = embed_dim
+        self.backend = backend
 
         self.blank_detector = BlankSpaceDetector(
             flatness_threshold=flatness_threshold,
@@ -101,12 +103,24 @@ class EnergyExplorer:
         )
 
         # Step 2: Run Langevin dynamics biased toward blank regions
-        trajectory = self.langevin.sample_trajectory(
-            z_explore,
-            energy_fn,
-            num_steps=num_langevin_steps,
-            blank_score=blank_info["combined_score"],
-        )
+        if self.backend is not None:
+            # Delegate exploration to the physics backend
+            steps = num_langevin_steps or self.langevin.max_steps
+            trajectory_frames = [z_explore]
+            z_current = z_explore
+            for _ in range(steps):
+                z_current = self.backend.explore_step(
+                    z_current, temperature=self.langevin.temperature
+                )
+                trajectory_frames.append(z_current)
+            trajectory = torch.stack(trajectory_frames, dim=0)  # [T, B, D]
+        else:
+            trajectory = self.langevin.sample_trajectory(
+                z_explore,
+                energy_fn,
+                num_steps=num_langevin_steps,
+                blank_score=blank_info["combined_score"],
+            )
 
         # Step 3: Compute Fisher metric at starting points
         if predictor_fn is not None:

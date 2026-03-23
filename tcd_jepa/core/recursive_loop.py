@@ -159,6 +159,7 @@ class RecursiveLoop:
         persistence_threshold: float = 0.3,
         max_modules: int = 10,
         device: torch.device = torch.device("cpu"),
+        backend=None,
     ) -> None:
         self.embed_dim = embed_dim
         self.explore_every = explore_every
@@ -171,6 +172,7 @@ class RecursiveLoop:
             langevin_step_size=langevin_step_size,
             langevin_temperature=langevin_temperature,
             langevin_steps=langevin_steps,
+            backend=backend,
         )
 
         self.crystallizer = ModuleCrystallizer(
