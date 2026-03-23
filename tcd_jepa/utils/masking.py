@@ -101,7 +101,7 @@ class MaskCollator:
             if acceptable_regions is not None:
                 constrain_mask(mask, tries)
             mask = torch.nonzero(mask.flatten())
-            valid_mask = len(mask) > self.min_keep
+            valid_mask = len(mask) >= self.min_keep
             if not valid_mask:
                 timeout -= 1
                 if timeout == 0:
