@@ -460,11 +460,13 @@ def pretrain(cfg, dataset_name, data_dir, device, use_tcd=False):
 
     logger.info(f"[{method}] Starting pretraining...")
     t0 = time.time()
-    trainer.train(num_epochs)
+    try:
+        trainer.train(num_epochs)
+    finally:
+        metric_logger.close()
     train_time = time.time() - t0
     logger.info(f"[{method}] Pretraining done in {train_time / 3600:.2f} hours")
 
-    metric_logger.close()
     num_modules = recursive_loop.num_modules if recursive_loop else 0
 
     # Clean up to free GPU memory before evaluation
@@ -563,7 +565,6 @@ def run_single_benchmark(dataset_name, cfg, seeds=(42,)):
                 # Free GPU memory between runs
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                import gc
                 gc.collect()
 
     return all_results
