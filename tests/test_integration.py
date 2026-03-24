@@ -243,7 +243,7 @@ class TestDynamicPredictorWiring:
         result["loss"].backward()
 
         # Gate parameters should have gradients (even without modules)
-        for p in model.predictor.module_gate.parameters():
+        for p in model.predictor.token_gate.parameters():
             # Gate isn't used when no modules registered, so no grads expected
             pass
 
