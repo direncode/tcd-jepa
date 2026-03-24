@@ -81,16 +81,22 @@ def create_from_huggingface(output_dir):
         print("pip install datasets  # required for HuggingFace download")
         sys.exit(1)
 
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi()
+        api.whoami()
+    except Exception:
+        print("ImageNet-1k is a gated dataset. You must authenticate first:")
+        print("  1. Create an account at https://huggingface.co")
+        print("  2. Accept the license at https://huggingface.co/datasets/ILSVRC/imagenet-1k")
+        print("  3. Run: huggingface-cli login")
+        sys.exit(1)
+
     output_dir = Path(output_dir)
 
     print("Downloading ImageNet-100 from HuggingFace...")
     print("This may take a while depending on your connection.")
 
-    # Use the standard ImageNet-100 subset on HuggingFace
-    ds = load_dataset("imagenet-1k", split="train",
-                      trust_remote_code=True, streaming=False)
-
-    # Filter to our 100 classes
     # Map synset IDs to integer labels
     cls_to_idx = {cls_id: i for i, cls_id in enumerate(IMAGENET100_CLASSES)}
 
@@ -98,12 +104,11 @@ def create_from_huggingface(output_dir):
         out_split = "val" if split == "validation" else split
         print(f"Processing {split}...")
 
-        ds_split = load_dataset("imagenet-1k", split=split, trust_remote_code=True)
+        ds_split = load_dataset("ILSVRC/imagenet-1k", split=split)
 
         count = 0
         for item in ds_split:
             label = item["label"]
-            # This depends on the HF dataset format — may need class name mapping
             synset = ds_split.features["label"].int2str(label)
             if synset in cls_to_idx:
                 cls_dir = output_dir / out_split / synset
