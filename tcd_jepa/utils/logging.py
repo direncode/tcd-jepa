@@ -50,12 +50,22 @@ class MetricLogger:
         with open(self.json_path, "a") as f:
             f.write(json.dumps(metrics) + "\n")
 
-        # CSV
+        # CSV — rebuild writer when new fields appear
+        fields = list(metrics.keys())
         if not self._fields_written:
             self._csv_file = open(self.csv_path, "w", newline="")
-            self._csv_writer = csv.DictWriter(self._csv_file, fieldnames=list(metrics.keys()))
+            self._csv_fieldnames = fields
+            self._csv_writer = csv.DictWriter(
+                self._csv_file, fieldnames=fields, extrasaction="ignore")
             self._csv_writer.writeheader()
             self._fields_written = True
+        elif not set(fields).issubset(self._csv_fieldnames):
+            # New columns appeared — rewrite CSV with expanded header
+            self._csv_file.close()
+            self._csv_fieldnames = list(dict.fromkeys(self._csv_fieldnames + fields))
+            self._csv_file = open(self.csv_path, "a", newline="")
+            self._csv_writer = csv.DictWriter(
+                self._csv_file, fieldnames=self._csv_fieldnames, extrasaction="ignore")
         if self._csv_writer is not None:
             self._csv_writer.writerow(metrics)
             self._csv_file.flush()
