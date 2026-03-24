@@ -131,7 +131,7 @@ class MaskCollator:
             generator=g, scale=self.pred_mask_scale, aspect_ratio_scale=self.aspect_ratio
         )
         e_size = self._sample_block_size(
-            generator=g, scale=self.enc_mask_scale, aspect_ratio_scale=(1.0, 1.0)
+            generator=g, scale=self.enc_mask_scale, aspect_ratio_scale=self.aspect_ratio
         )
 
         collated_masks_pred, collated_masks_enc = [], []
