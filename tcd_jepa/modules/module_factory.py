@@ -25,9 +25,10 @@ class AttractorModule(nn.Module):
     def __init__(self, embed_dim: int, centroid: Optional[torch.Tensor] = None) -> None:
         super().__init__()
         self.embed_dim = embed_dim
+        # Centroid is learnable so the module can adapt during training
         self.centroid = nn.Parameter(
             centroid if centroid is not None else torch.randn(embed_dim) * 0.01,
-            requires_grad=False,
+            requires_grad=True,
         )
         self.predictor = nn.Sequential(
             nn.Linear(embed_dim, embed_dim * 2),

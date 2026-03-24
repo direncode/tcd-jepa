@@ -5,7 +5,7 @@ import pytest
 
 from tcd_jepa.models.vision_transformer import VisionTransformer, vit_small, vit_tiny
 from tcd_jepa.models.context_encoder import ContextEncoder
-from tcd_jepa.models.target_encoder import TargetEncoder, momentum_schedule
+from tcd_jepa.models.target_encoder import TargetEncoder, momentum_schedule, cosine_momentum_schedule
 from tcd_jepa.utils.tensors import apply_masks, trunc_normal_
 
 
@@ -107,11 +107,24 @@ class TestTargetEncoder:
             assert not p.requires_grad
 
     def test_momentum_schedule(self):
-        """Momentum schedule produces correct range."""
-        schedule = list(momentum_schedule(0.996, 1.0, 100))
-        assert len(schedule) == 100
-        assert abs(schedule[0] - 0.996) < 1e-6
-        assert abs(schedule[-1] - 1.0) < 1e-6
+        """Momentum schedule produces correct range and is infinite."""
+        gen = momentum_schedule(0.996, 1.0, 100)
+        values = [next(gen) for _ in range(100)]
+        assert abs(values[0] - 0.996) < 1e-6
+        assert abs(values[-1] - 1.0) < 1e-6
+        # Should not raise StopIteration
+        extra = next(gen)
+        assert abs(extra - 1.0) < 1e-6
+
+    def test_cosine_momentum_schedule(self):
+        """Cosine momentum schedule is smooth and monotonic."""
+        gen = cosine_momentum_schedule(0.996, 1.0, 100)
+        values = [next(gen) for _ in range(100)]
+        assert abs(values[0] - 0.996) < 1e-6
+        assert abs(values[-1] - 1.0) < 1e-6
+        # Should be monotonically increasing
+        for i in range(1, len(values)):
+            assert values[i] >= values[i-1] - 1e-6
 
 
 class TestTensorUtils:

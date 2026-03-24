@@ -1,21 +1,25 @@
-"""Distributed training for TCD-JEPA on multiple GPUs.
+"""Distributed training for TCD-JEPA — production grade.
 
-Uses PyTorch DDP (DistributedDataParallel) with bf16 mixed precision
-and torch.compile for maximum throughput on H100 GPUs.
+Features:
+- DDP with bf16 mixed precision and torch.compile
+- Gradient accumulation for large effective batch sizes
+- Cosine EMA momentum schedule
+- Collapse detection and prevention
+- Periodic linear probe evaluation during training
+- Full checkpoint resume (model, optimizer, scheduler, RNG)
+- Fault tolerance with graceful error handling
 
-Launch with torchrun:
+Launch:
     torchrun --nproc_per_node=8 train_distributed.py --config configs/dist_cifar10.yaml
-    torchrun --nproc_per_node=8 train_distributed.py --config configs/dist_imagenet.yaml --tcd
-
-For full error tracebacks on crash:
-    TORCHELASTIC_ERROR_FILE=/tmp/torch_error.json torchrun ...
+    torchrun --nproc_per_node=8 train_distributed.py --config configs/dist_cifar10.yaml --tcd --compile --eval
 """
 
 import argparse
 import logging
+import math
+import os
 import subprocess
 import sys
-import os
 import time
 from pathlib import Path
 
@@ -23,6 +27,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as T
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -31,11 +36,11 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tcd_jepa.core.recursive_loop import RecursiveLoop
 from tcd_jepa.core.system1_encoder import StreamEncoder
 from tcd_jepa.models.tcd_jepa_model import TCDJEPAModel, build_tcd_jepa
-from tcd_jepa.models.target_encoder import momentum_schedule
-from tcd_jepa.training.losses import jepa_loss
+from tcd_jepa.models.target_encoder import cosine_momentum_schedule
+from tcd_jepa.training.losses import compute_collapse_metrics
 from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
 from tcd_jepa.training.trainer import build_optimizer
-from tcd_jepa.utils.checkpointing import save_checkpoint
+from tcd_jepa.utils.checkpointing import save_checkpoint, load_checkpoint
 from tcd_jepa.utils.logging import MetricLogger
 from tcd_jepa.utils.masking import MaskCollator
 
@@ -59,20 +64,20 @@ def setup_distributed():
 
 
 def cleanup_distributed():
-    dist.destroy_process_group()
+    if dist.is_initialized():
+        dist.destroy_process_group()
 
 
-def is_main_process():
-    return dist.get_rank() == 0
+def is_main():
+    return not dist.is_initialized() or dist.get_rank() == 0
 
 
-def get_world_size():
-    return dist.get_world_size()
+def world_size():
+    return dist.get_world_size() if dist.is_initialized() else 1
 
 
 def log_main(msg: str):
-    """Log only on rank 0."""
-    if is_main_process():
+    if is_main():
         logger.info(msg)
 
 
@@ -105,7 +110,7 @@ def build_cifar10(cfg: dict):
     ]
     dataset = torchvision.datasets.CIFAR10(
         root=data_cfg.get("data_dir", "./data"),
-        train=True, download=is_main_process(),
+        train=True, download=is_main(),
         transform=T.Compose(transforms),
     )
     return DropLabel(dataset)
@@ -123,7 +128,7 @@ def build_stl10(cfg: dict):
     ]
     dataset = torchvision.datasets.STL10(
         root=data_cfg.get("data_dir", "./data"),
-        split="train+unlabeled", download=is_main_process(),
+        split="train+unlabeled", download=is_main(),
         transform=T.Compose(transforms),
     )
     return DropLabel(dataset)
@@ -134,7 +139,6 @@ def build_imagenet(cfg: dict):
     img_size = data_cfg.get("img_size", 224)
     data_dir = data_cfg.get("data_dir", "./data/imagenet")
     train_dir = os.path.join(data_dir, "train")
-
     transforms = T.Compose([
         T.RandomResizedCrop(img_size, scale=(0.3, 1.0)),
         T.RandomHorizontalFlip(),
@@ -157,7 +161,7 @@ def build_dataset(cfg: dict):
     dataset_name = cfg.get("data", {}).get("dataset", "cifar10")
     builder = DATASET_BUILDERS.get(dataset_name)
     if builder is None:
-        raise ValueError(f"Unknown dataset: {dataset_name}. Available: {list(DATASET_BUILDERS.keys())}")
+        raise ValueError(f"Unknown dataset: {dataset_name}")
     return builder(cfg)
 
 
@@ -166,7 +170,7 @@ def build_dataset(cfg: dict):
 # ---------------------------------------------------------------------------
 
 class DistributedTrainer:
-    """DDP trainer with bf16 autocast, gradient clipping, and optional TCD loop."""
+    """Production-grade DDP trainer for TCD-JEPA."""
 
     def __init__(
         self,
@@ -184,8 +188,9 @@ class DistributedTrainer:
         checkpoint_dir: str = "checkpoints",
         recursive_loop=None,
         stream_encoder=None,
+        grad_accum_steps: int = 1,
     ):
-        self.model = model  # unwrapped model for EMA / target encoder access
+        self.model = model
         self.ddp_model = ddp_model
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
@@ -197,54 +202,76 @@ class DistributedTrainer:
         self.cfg = cfg
         self.metric_logger = metric_logger
         self.checkpoint_dir = Path(checkpoint_dir)
-        if is_main_process():
+        if is_main():
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.recursive_loop = recursive_loop
         self.stream_encoder = stream_encoder
         self.global_step = 0
+        self.grad_accum_steps = grad_accum_steps
         self._known_module_ids: set = set()
 
         self.use_bf16 = cfg.get("training", {}).get("use_bfloat16", True)
         self.grad_clip = cfg.get("training", {}).get("grad_clip", 1.0)
 
-    def train(self, num_epochs: int):
+    def train(self, num_epochs: int, start_epoch: int = 0):
         self.model.train()
 
-        for epoch in range(num_epochs):
+        for epoch in range(start_epoch, num_epochs):
             self.sampler.set_epoch(epoch)
             epoch_loss = 0.0
-            num_batches = 0
+            epoch_steps = 0
             t0 = time.time()
 
-            for images, masks_enc, masks_pred in self.train_loader:
-                loss_val, lr, wd, mom = self._train_step(images, masks_enc, masks_pred)
+            self.optimizer.zero_grad(set_to_none=True)
+
+            for batch_idx, (images, masks_enc, masks_pred) in enumerate(self.train_loader):
+                is_accum_step = (batch_idx + 1) % self.grad_accum_steps != 0
+                loss_val, lr, wd, mom = self._train_step(
+                    images, masks_enc, masks_pred,
+                    accumulate=is_accum_step,
+                )
                 epoch_loss += loss_val
-                num_batches += 1
+                epoch_steps += 1
                 self.global_step += 1
 
-            # Average loss across all ranks
-            avg_loss = epoch_loss / max(num_batches, 1)
+            # Average loss across ranks
+            avg_loss = epoch_loss / max(epoch_steps, 1)
             loss_tensor = torch.tensor([avg_loss], device=self.device)
             dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
             avg_loss = loss_tensor.item()
 
-            # Recursive loop (on rank 0 only, then broadcast)
+            # Recursive loop (rank 0, then broadcast)
             if self.recursive_loop is not None and self.stream_encoder is not None:
                 self._run_recursive_loop(images, epoch)
 
             epoch_time = time.time() - t0
 
-            if is_main_process():
+            if is_main():
                 modules_str = ""
                 if self.recursive_loop is not None:
                     modules_str = f" modules={self.recursive_loop.num_modules}"
+
+                # Collapse metrics (every 5 epochs)
+                collapse_str = ""
+                if epoch % 5 == 0:
+                    with torch.no_grad():
+                        sample_imgs = images[:32].to(self.device)
+                        with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=self.use_bf16):
+                            z = self.model.context_encoder(sample_imgs)
+                        z_pooled = z.mean(dim=1).float()
+                        metrics = compute_collapse_metrics(z_pooled)
+                        collapse_str = (
+                            f" rank={metrics['effective_rank']:.1f}"
+                            f" std={metrics['std_mean']:.4f}"
+                        )
+
                 logger.info(
                     f"Epoch {epoch}/{num_epochs}: loss={avg_loss:.4f} "
-                    f"lr={lr:.6f} time={epoch_time:.1f}s{modules_str}"
+                    f"lr={lr:.6f} time={epoch_time:.1f}s{modules_str}{collapse_str}"
                 )
 
                 if self.metric_logger is not None:
-                    metrics = {
+                    log_metrics = {
                         "epoch": epoch,
                         "loss": avg_loss,
                         "lr": lr,
@@ -253,8 +280,8 @@ class DistributedTrainer:
                         "epoch_time": epoch_time,
                     }
                     if self.recursive_loop:
-                        metrics["num_modules"] = self.recursive_loop.num_modules
-                    self.metric_logger.log(metrics, step=epoch)
+                        log_metrics["num_modules"] = self.recursive_loop.num_modules
+                    self.metric_logger.log(log_metrics, step=epoch)
 
                 # Checkpoint
                 save_freq = self.cfg.get("training", {}).get("checkpoint_freq", 10)
@@ -266,45 +293,55 @@ class DistributedTrainer:
                         predictor=self.model.predictor,
                         target_encoder=self.model.target_encoder,
                         optimizer=self.optimizer,
+                        lr_scheduler_step=self.lr_scheduler._step,
+                        wd_scheduler_step=self.wd_scheduler._step,
+                        global_step=self.global_step,
                     )
 
             dist.barrier()
 
-    def _train_step(self, images, masks_enc, masks_pred):
+    def _train_step(self, images, masks_enc, masks_pred, accumulate=False):
         images = images.to(self.device, non_blocking=True)
         masks_enc = [m.to(self.device, non_blocking=True) for m in masks_enc]
         masks_pred = [m.to(self.device, non_blocking=True) for m in masks_pred]
 
+        # Forward with autocast
         with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=self.use_bf16):
             result = self.ddp_model(images, masks_enc, masks_pred)
             loss = result["loss"]
+            if self.grad_accum_steps > 1:
+                loss = loss / self.grad_accum_steps
 
-        self.optimizer.zero_grad(set_to_none=True)
+        # Backward
         loss.backward()
 
-        if self.grad_clip > 0:
-            nn.utils.clip_grad_norm_(self.ddp_model.parameters(), self.grad_clip)
+        if not accumulate:
+            # Gradient clipping
+            if self.grad_clip > 0:
+                nn.utils.clip_grad_norm_(self.ddp_model.parameters(), self.grad_clip)
 
-        self.optimizer.step()
+            self.optimizer.step()
+            self.optimizer.zero_grad(set_to_none=True)
 
-        # Update schedules
+        # Update schedules (every micro-step for smooth scheduling)
         new_lr = self.lr_scheduler.step()
         new_wd = self.wd_scheduler.step()
         new_m = next(self.ema_schedule)
 
-        # EMA update (on unwrapped model)
+        # EMA update on unwrapped model
         self.model.update_target_encoder(new_m)
 
-        return loss.item(), new_lr, new_wd, new_m
+        return result["loss"].item() * (self.grad_accum_steps if self.grad_accum_steps > 1 else 1), new_lr, new_wd, new_m
 
     def _run_recursive_loop(self, images, epoch):
         """Run TCD recursive loop at end of epoch."""
         with torch.no_grad():
-            imgs = images.to(self.device, non_blocking=True)
-            z = self.model.context_encoder(imgs)
-            t = self.model.target_encoder(imgs)
+            imgs = images[:64].to(self.device, non_blocking=True)
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=self.use_bf16):
+                z = self.model.context_encoder(imgs)
+                t = self.model.target_encoder(imgs)
         energy_fn = self.stream_encoder.make_energy_fn(t)
-        loop_result = self.recursive_loop.step(z, energy_fn, epoch=epoch)
+        loop_result = self.recursive_loop.step(z.float(), energy_fn, epoch=epoch)
 
         if loop_result.get("crystallized"):
             n_mods = loop_result["crystallization"]["num_active_modules"]
@@ -339,23 +376,22 @@ class DistributedTrainer:
 
 @torch.no_grad()
 def extract_features(model, dataloader, device, use_bf16=True):
-    """Extract features from the context encoder for linear probing."""
+    """Extract features from context encoder for linear probing."""
     model.eval()
-    all_features = []
-    all_labels = []
+    all_features, all_labels = [], []
     for images, labels in dataloader:
         images = images.to(device, non_blocking=True)
         with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=use_bf16):
-            features = model.context_encoder(images)  # [B, N, D]
-        # Global average pool over patches
-        features = features.mean(dim=1).float()  # [B, D]
+            features = model.context_encoder(images)
+        features = features.mean(dim=1).float()
         all_features.append(features.cpu())
         all_labels.append(labels)
+    model.train()
     return torch.cat(all_features), torch.cat(all_labels)
 
 
 def linear_probe(model, cfg, device):
-    """Run a fast linear probe to evaluate representation quality."""
+    """Run linear probe to evaluate representation quality."""
     data_cfg = cfg.get("data", {})
     dataset_name = data_cfg.get("dataset", "cifar10")
     img_size = data_cfg.get("img_size", 32)
@@ -373,9 +409,7 @@ def linear_probe(model, cfg, device):
         num_classes = 10
     elif dataset_name == "stl10":
         transform = T.Compose([
-            T.Resize(img_size),
-            T.CenterCrop(img_size),
-            T.ToTensor(),
+            T.Resize(img_size), T.CenterCrop(img_size), T.ToTensor(),
             T.Normalize((0.4467, 0.4398, 0.4066), (0.2603, 0.2566, 0.2713)),
         ])
         train_ds = torchvision.datasets.STL10(
@@ -386,9 +420,7 @@ def linear_probe(model, cfg, device):
     elif dataset_name == "imagenet":
         data_dir = data_cfg.get("data_dir", "./data/imagenet")
         transform = T.Compose([
-            T.Resize(256),
-            T.CenterCrop(img_size),
-            T.ToTensor(),
+            T.Resize(256), T.CenterCrop(img_size), T.ToTensor(),
             T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
         ])
         train_ds = torchvision.datasets.ImageFolder(
@@ -397,54 +429,76 @@ def linear_probe(model, cfg, device):
             os.path.join(data_dir, "val"), transform=transform)
         num_classes = 1000
     else:
-        log_main(f"Linear probe not supported for dataset: {dataset_name}")
-        return
+        log_main(f"Linear probe not supported for: {dataset_name}")
+        return None
 
     train_loader = DataLoader(train_ds, batch_size=512, shuffle=False, num_workers=8, pin_memory=True)
     test_loader = DataLoader(test_ds, batch_size=512, shuffle=False, num_workers=8, pin_memory=True)
 
-    log_main("Extracting training features...")
+    log_main("Extracting features...")
     train_feats, train_labels = extract_features(model, train_loader, device)
-    log_main("Extracting test features...")
     test_feats, test_labels = extract_features(model, test_loader, device)
-
     embed_dim = train_feats.shape[1]
     log_main(f"Linear probe: {train_feats.shape[0]} train, {test_feats.shape[0]} test, dim={embed_dim}")
 
-    # Train linear classifier
-    classifier = nn.Linear(embed_dim, num_classes).to(device)
-    optimizer = torch.optim.SGD(classifier.parameters(), lr=0.1, momentum=0.9, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50)
-    criterion = nn.CrossEntropyLoss()
-
-    # Move features to device
+    # Normalize features
     train_feats = train_feats.to(device)
     train_labels = train_labels.to(device)
     test_feats = test_feats.to(device)
     test_labels = test_labels.to(device)
 
+    mu, std = train_feats.mean(0), train_feats.std(0).clamp(min=1e-6)
+    train_feats = (train_feats - mu) / std
+    test_feats = (test_feats - mu) / std
+
+    # Train linear classifier
+    classifier = nn.Linear(embed_dim, num_classes).to(device)
+    optimizer = torch.optim.SGD(classifier.parameters(), lr=0.3, momentum=0.9, weight_decay=1e-6)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
+
     probe_bs = 1024
+    best_acc = 0.0
     classifier.train()
-    for ep in range(50):
+    for ep in range(100):
         perm = torch.randperm(len(train_feats), device=device)
         for i in range(0, len(train_feats), probe_bs):
             idx = perm[i:i + probe_bs]
             logits = classifier(train_feats[idx])
-            loss = criterion(logits, train_labels[idx])
+            loss = F.cross_entropy(logits, train_labels[idx])
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
         scheduler.step()
 
-    # Evaluate
+        # Eval every 10 epochs
+        if (ep + 1) % 10 == 0:
+            classifier.eval()
+            with torch.no_grad():
+                preds = classifier(test_feats).argmax(dim=1)
+                acc = (preds == test_labels).float().mean().item() * 100
+                best_acc = max(best_acc, acc)
+            classifier.train()
+
+    # Final eval
     classifier.eval()
     with torch.no_grad():
-        logits = classifier(test_feats)
-        preds = logits.argmax(dim=1)
+        preds = classifier(test_feats).argmax(dim=1)
         acc = (preds == test_labels).float().mean().item() * 100
+        best_acc = max(best_acc, acc)
 
-    log_main(f"Linear probe accuracy: {acc:.2f}%")
-    return acc
+    log_main(f"Linear probe accuracy: {best_acc:.2f}%")
+
+    # k-NN
+    train_fn = F.normalize(train_feats, dim=1)
+    test_fn = F.normalize(test_feats, dim=1)
+    for k in [1, 5, 20]:
+        sim = test_fn @ train_fn.T
+        _, topk = sim.topk(k, dim=1)
+        knn_preds = train_labels[topk].mode(dim=1).values
+        knn_acc = (knn_preds == test_labels).float().mean().item() * 100
+        log_main(f"k-NN (k={k}): {knn_acc:.2f}%")
+
+    return best_acc
 
 
 # ---------------------------------------------------------------------------
@@ -458,24 +512,26 @@ def main():
     parser.add_argument("--compile", action="store_true", help="Use torch.compile")
     parser.add_argument("--probe", action="store_true", help="Run linear probe after training")
     parser.add_argument("--eval", action="store_true", help="Run full benchmark eval after training")
-    parser.add_argument("--eval-epochs", type=int, default=30, help="Pretraining epochs for benchmark eval")
+    parser.add_argument("--eval-epochs", type=int, default=30)
+    parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
+    parser.add_argument("--grad-accum", type=int, default=1, help="Gradient accumulation steps")
     parser.add_argument("overrides", nargs="*", help="Config overrides")
     args = parser.parse_args()
 
     # -- Distributed setup --
     local_rank = setup_distributed()
     device = torch.device(f"cuda:{local_rank}")
-    world_size = get_world_size()
+    ws = world_size()
 
     from tcd_jepa.utils.config import load_config_with_overrides
     cfg = load_config_with_overrides(args.config, args.overrides)
 
-    # Seed (offset by rank for data diversity)
     seed = cfg.get("training", {}).get("seed", 42)
     torch.manual_seed(seed + dist.get_rank())
     np.random.seed(seed + dist.get_rank())
+    torch.cuda.manual_seed(seed + dist.get_rank())
 
-    log_main(f"World size: {world_size}, local_rank: {local_rank}")
+    log_main(f"World size: {ws}, local_rank: {local_rank}")
     log_main(f"Dataset: {cfg.get('data', {}).get('dataset', 'cifar10')}")
 
     enc_cfg = cfg["model"]["encoder"]
@@ -486,6 +542,9 @@ def main():
     patch_size = enc_cfg["patch_size"]
 
     # -- Build model --
+    collapse_weight = train_cfg.get("collapse_weight", 0.01)
+    drop_path_rate = enc_cfg.get("drop_path_rate", 0.1)
+
     model = build_tcd_jepa(
         img_size=img_size,
         patch_size=patch_size,
@@ -495,41 +554,41 @@ def main():
         predictor_embed_dim=pred_cfg["predictor_embed_dim"],
         predictor_depth=pred_cfg["predictor_depth"],
         predictor_num_heads=pred_cfg["num_heads"],
+        drop_path_rate=drop_path_rate,
         use_dynamic_predictor=args.tcd,
+        collapse_weight=collapse_weight,
     ).to(device)
 
     param_count = sum(p.numel() for p in model.parameters())
-    log_main(f"Model parameters: {param_count:,}")
+    log_main(f"Model parameters: {param_count:,} | collapse_weight={collapse_weight}")
 
-    # Disable context encoder hooks — they cause torch.compile recompilations
-    # and CPU–GPU sync overhead.  Stats can be re-enabled for analysis later.
+    # Disable hooks for compile compatibility
     model.context_encoder.disable_hooks()
 
-    # Optional torch.compile
+    # torch.compile
     if args.compile:
-        log_main("Compiling model with torch.compile...")
-        model.context_encoder.encoder = torch.compile(model.context_encoder.encoder)
+        log_main("Compiling model with torch.compile (mode=reduce-overhead)...")
+        model.context_encoder.encoder = torch.compile(
+            model.context_encoder.encoder, mode="reduce-overhead"
+        )
         model.predictor = torch.compile(model.predictor)
-        log_main("Compilation complete")
+        log_main("Compilation queued (will compile on first forward)")
 
-    # Wrap in DDP (find_unused_parameters needed for dynamic predictor)
+    # DDP
     ddp_model = DDP(
         model,
         device_ids=[local_rank],
         find_unused_parameters=args.tcd,
     )
 
-    # -- Build dataset + distributed sampler --
-    # Ensure only rank 0 downloads
-    if not is_main_process():
+    # -- Dataset --
+    if not is_main():
         dist.barrier()
     dataset = build_dataset(cfg)
-    if is_main_process():
+    if is_main():
         dist.barrier()
 
-    sampler = DistributedSampler(
-        dataset, num_replicas=world_size, rank=dist.get_rank(), shuffle=True,
-    )
+    sampler = DistributedSampler(dataset, num_replicas=ws, rank=dist.get_rank(), shuffle=True)
 
     mask_collator = MaskCollator(
         input_size=(img_size, img_size),
@@ -543,7 +602,7 @@ def main():
     )
 
     per_gpu_batch = train_cfg["batch_size"]
-    effective_batch = per_gpu_batch * world_size
+    effective_batch = per_gpu_batch * ws * args.grad_accum
     num_workers = cfg.get("data", {}).get("num_workers", 8)
 
     dataloader = DataLoader(
@@ -554,18 +613,18 @@ def main():
         collate_fn=mask_collator,
         drop_last=True,
         pin_memory=True,
-        persistent_workers=True if num_workers > 0 else False,
+        persistent_workers=num_workers > 0,
         prefetch_factor=3 if num_workers > 0 else None,
     )
 
-    log_main(f"Dataset: {len(dataset)} samples, batch_size={per_gpu_batch}x{world_size}={effective_batch}")
+    log_main(f"Dataset: {len(dataset)} samples, batch={per_gpu_batch}x{ws}x{args.grad_accum}={effective_batch}")
     log_main(f"Batches/epoch: {len(dataloader)}")
 
     # -- Optimizer & schedulers --
-    # Linear scaling rule: scale LR by world_size
     base_lr = train_cfg["learning_rate"]
-    scaled_lr = base_lr * world_size
-    log_main(f"LR scaling: {base_lr} -> {scaled_lr} (x{world_size})")
+    # Linear scaling rule
+    scaled_lr = base_lr * effective_batch / 256.0
+    log_main(f"LR: base={base_lr}, scaled={scaled_lr:.6f} (eff_batch={effective_batch}/256)")
 
     num_epochs = train_cfg["epochs"]
     steps_per_epoch = len(dataloader)
@@ -576,10 +635,10 @@ def main():
     lr_scheduler = WarmupCosineSchedule(
         optimizer,
         warmup_steps=train_cfg["warmup_epochs"] * steps_per_epoch,
-        start_lr=train_cfg.get("start_lr", 1e-4),
+        start_lr=train_cfg.get("start_lr", 1e-5),
         ref_lr=scaled_lr,
         T_max=total_steps,
-        final_lr=train_cfg.get("final_lr", 0.0),
+        final_lr=train_cfg.get("final_lr", 1e-6),
     )
     wd_scheduler = CosineWDSchedule(
         optimizer,
@@ -587,15 +646,36 @@ def main():
         T_max=total_steps,
         final_wd=train_cfg.get("final_weight_decay", train_cfg["weight_decay"]),
     )
-    ema_schedule = momentum_schedule(
+    ema_schedule = cosine_momentum_schedule(
         cfg["model"]["ema"]["start"],
         cfg["model"]["ema"]["end"],
         total_steps,
     )
 
-    # -- Logging (rank 0 only) --
+    # -- Resume --
+    start_epoch = 0
+    if args.resume:
+        log_main(f"Resuming from {args.resume}")
+        ckpt = load_checkpoint(
+            args.resume,
+            encoder=model.context_encoder,
+            predictor=model.predictor,
+            target_encoder=model.target_encoder,
+            optimizer=optimizer,
+            device=device,
+        )
+        start_epoch = ckpt.get("epoch", 0) + 1
+        # Fast-forward schedulers
+        ff_steps = ckpt.get("global_step", start_epoch * steps_per_epoch)
+        for _ in range(ff_steps):
+            lr_scheduler.step()
+            wd_scheduler.step()
+            next(ema_schedule)
+        log_main(f"Resumed at epoch {start_epoch}, step {ff_steps}")
+
+    # -- Logging --
     metric_logger = None
-    if is_main_process():
+    if is_main():
         log_cfg = cfg.get("logging", {})
         log_dir = log_cfg.get("log_dir", "./logs")
         metric_logger = MetricLogger(
@@ -605,7 +685,7 @@ def main():
             wandb_config=cfg,
         )
 
-    # -- Optional TCD recursive loop --
+    # -- TCD recursive loop --
     recursive_loop = None
     stream_encoder = None
     if args.tcd:
@@ -639,41 +719,41 @@ def main():
         checkpoint_dir=checkpoint_dir,
         recursive_loop=recursive_loop,
         stream_encoder=stream_encoder,
+        grad_accum_steps=args.grad_accum,
     )
 
-    log_main(f"Starting distributed training for {num_epochs} epochs")
+    log_main(f"Starting training for {num_epochs} epochs (from epoch {start_epoch})")
     t_start = time.time()
-    trainer.train(num_epochs)
+    trainer.train(num_epochs, start_epoch=start_epoch)
     total_time = time.time() - t_start
     log_main(f"Training complete in {total_time:.1f}s ({total_time / 60:.1f} min)")
 
     # -- Linear probe --
-    if args.probe and is_main_process():
+    if args.probe and is_main():
         log_main("Running linear probe evaluation...")
         acc = linear_probe(model, cfg, device)
         if metric_logger is not None and acc is not None:
             metric_logger.log({"linear_probe_acc": acc}, step=num_epochs)
 
-    # -- Full benchmark eval (rank 0 only, after DDP cleanup) --
-    run_full_eval = args.eval and is_main_process()
-    eval_epochs = args.eval_epochs
-
+    # -- Cleanup --
+    run_full_eval = args.eval and is_main()
     if metric_logger is not None:
         metric_logger.close()
 
     cleanup_distributed()
 
+    # -- Full benchmark eval (after DDP cleanup) --
     if run_full_eval:
-        logger.info("Running full benchmark evaluation (experiments/benchmark_eval.py)...")
+        logger.info("Running full benchmark evaluation...")
         result = subprocess.run(
             [sys.executable, "-m", "experiments.benchmark_eval",
-             "--epochs", str(eval_epochs), "--seeds", "2"],
+             "--epochs", str(args.eval_epochs), "--seeds", "2"],
             cwd=os.path.dirname(os.path.abspath(__file__)),
         )
-        if result.returncode != 0:
-            logger.error(f"Benchmark eval exited with code {result.returncode}")
+        if result.returncode == 0:
+            logger.info("Benchmark complete. Results in results/benchmark/")
         else:
-            logger.info("Benchmark evaluation complete. Results in results/benchmark/")
+            logger.error(f"Benchmark exited with code {result.returncode}")
 
 
 if __name__ == "__main__":

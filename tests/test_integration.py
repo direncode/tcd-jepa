@@ -10,7 +10,7 @@ from tcd_jepa.core.energy_landscape import (
     compute_energy_statistics,
     compute_smooth_l1_energy,
 )
-from tcd_jepa.training.losses import jepa_loss, l2_loss
+from tcd_jepa.training.losses import jepa_loss, variance_covariance_loss, compute_collapse_metrics
 from tcd_jepa.training.schedulers import WarmupCosineSchedule, CosineWDSchedule
 from tcd_jepa.training.metrics import TrainingMetrics
 
@@ -150,10 +150,34 @@ class TestLosses:
         loss = jepa_loss(x, y)
         assert loss.item() >= 0.0
 
-    def test_jepa_loss_zero_for_identical(self):
-        """JEPA loss is zero for identical inputs."""
+    def test_jepa_loss_small_for_similar(self):
+        """JEPA loss is small for similar inputs (after target normalization)."""
         x = torch.randn(4, 10, 64)
-        assert jepa_loss(x, x).item() == 0.0
+        # After layer_norm on targets, loss won't be exactly 0 for identical inputs
+        # but should be very small for normalized inputs
+        import torch.nn.functional as F
+        x_norm = F.layer_norm(x, (64,))
+        assert jepa_loss(x_norm, x).item() < 0.01
+
+    def test_collapse_metrics(self):
+        """Collapse metrics detect healthy vs collapsed representations."""
+        healthy = torch.randn(100, 64)
+        metrics = compute_collapse_metrics(healthy)
+        assert metrics["effective_rank"] > 10
+        assert metrics["std_mean"] > 0.5
+
+        collapsed = torch.ones(100, 64) + torch.randn(100, 64) * 0.001
+        metrics_c = compute_collapse_metrics(collapsed)
+        assert metrics_c["effective_rank"] < metrics["effective_rank"]
+
+    def test_variance_covariance_loss(self):
+        """VICReg loss penalizes collapsed representations."""
+        healthy = torch.randn(32, 64)
+        collapsed = torch.ones(32, 64)
+        loss_h = variance_covariance_loss(healthy)
+        loss_c = variance_covariance_loss(collapsed)
+        # Collapsed should have higher variance loss
+        assert loss_c["var_loss"].item() > loss_h["var_loss"].item()
 
 
 class TestSchedulers:

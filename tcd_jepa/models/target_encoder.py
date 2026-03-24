@@ -1,10 +1,12 @@
 """Target encoder with exponential moving average (EMA) updates.
 
 The target encoder is a momentum-updated copy of the context encoder,
-following the standard JEPA paradigm from I-JEPA.
+following the I-JEPA paradigm. Uses cosine momentum schedule matching
+the FAIR implementation.
 """
 
 import copy
+import math
 from typing import Iterator, Optional
 
 import torch
@@ -31,30 +33,24 @@ class TargetEncoder(nn.Module):
     def update_ema(self, context_encoder: nn.Module, momentum: float) -> None:
         """Update target encoder parameters via EMA.
 
-        Args:
-            context_encoder: The context encoder (or its underlying encoder).
-            momentum: EMA momentum in [0, 1]. Higher = slower update.
-                target = momentum * target + (1 - momentum) * context
+        target = momentum * target + (1 - momentum) * context
         """
         # Handle ContextEncoder wrapper
         if hasattr(context_encoder, "encoder"):
             context_encoder = context_encoder.encoder
 
-        for param_q, param_k in zip(context_encoder.parameters(), self.encoder.parameters()):
+        # Handle torch.compile wrapper
+        src = context_encoder
+        if hasattr(src, "_orig_mod"):
+            src = src._orig_mod
+
+        for param_q, param_k in zip(src.parameters(), self.encoder.parameters()):
             param_k.data.mul_(momentum).add_((1.0 - momentum) * param_q.detach().data)
 
     def forward(
         self, x: torch.Tensor, masks: Optional[list[torch.Tensor]] = None
     ) -> torch.Tensor:
-        """Encode images without gradient tracking.
-
-        Args:
-            x: Input images [B, C, H, W].
-            masks: Optional list of index tensors for patch selection.
-
-        Returns:
-            Encoded patch representations.
-        """
+        """Encode images without gradient tracking."""
         with torch.no_grad():
             return self.encoder(x, masks=masks)
 
@@ -67,23 +63,33 @@ class TargetEncoder(nn.Module):
         return self.encoder.patch_embed
 
 
-def momentum_schedule(base_value: float, final_value: float, num_steps: int) -> Iterator[float]:
-    """Generate a linear momentum schedule from base_value to final_value.
+def cosine_momentum_schedule(
+    base_value: float,
+    final_value: float,
+    num_steps: int,
+) -> Iterator[float]:
+    """Cosine momentum schedule matching I-JEPA/DINO.
 
-    Yields values indefinitely — after ``num_steps`` it clamps at
-    ``final_value`` so callers never hit ``StopIteration``.
+    momentum(t) = final - (final - base) * (cos(pi * t / T) + 1) / 2
 
-    Args:
-        base_value: Starting momentum (e.g., 0.996).
-        final_value: Final momentum (e.g., 1.0).
-        num_steps: Total number of training steps.
+    This provides a slow start, fast middle, slow end ramp from
+    base_value to final_value — much better than linear for EMA.
 
-    Yields:
-        Momentum value for each step.
+    Yields indefinitely (clamps at final_value after num_steps).
     """
-    denom = max(num_steps - 1, 1)
     for i in range(num_steps):
-        yield base_value + i * (final_value - base_value) / denom
-    # Clamp at final value forever so callers never get StopIteration
+        progress = i / max(num_steps - 1, 1)
+        value = final_value - (final_value - base_value) * (
+            math.cos(math.pi * progress) + 1.0
+        ) / 2.0
+        yield value
     while True:
         yield final_value
+
+
+# Keep backward compat alias
+def momentum_schedule(
+    base_value: float, final_value: float, num_steps: int
+) -> Iterator[float]:
+    """Linear momentum schedule (deprecated, use cosine_momentum_schedule)."""
+    return cosine_momentum_schedule(base_value, final_value, num_steps)

@@ -1,6 +1,5 @@
-# Production CIFAR-10 config — 8x H100 GPUs
-# Effective batch: 256 * 8 = 2048
-# Training time: ~15 minutes
+# Debug CIFAR-10 config — fast validation run
+# ~2 minutes on 8x H100
 
 model:
   encoder:
@@ -11,7 +10,7 @@ model:
     depth: 6
     num_heads: 3
     mlp_ratio: 4.0
-    drop_path_rate: 0.1
+    drop_path_rate: 0.0
   predictor:
     predictor_embed_dim: 96
     predictor_depth: 4
@@ -21,25 +20,25 @@ model:
     end: 1.0
 
 training:
-  epochs: 100
-  batch_size: 256          # per GPU
-  learning_rate: 0.001     # scaled by effective_batch/256 automatically
-  start_lr: 0.00001
-  final_lr: 0.000001
+  epochs: 10
+  batch_size: 512
+  learning_rate: 0.001
+  start_lr: 0.0001
+  final_lr: 0.0
   weight_decay: 0.05
   final_weight_decay: 0.05
-  warmup_epochs: 10
+  warmup_epochs: 2
   optimizer: adamw
   use_bfloat16: true
-  grad_clip: 3.0
-  checkpoint_freq: 25
+  grad_clip: 1.0
+  checkpoint_freq: 5
   seed: 42
-  collapse_weight: 0.01    # VICReg-style collapse prevention
+  collapse_weight: 0.01
 
 data:
   dataset: cifar10
   img_size: 32
-  num_workers: 8
+  num_workers: 4
   data_dir: ./data
 
 masking:
@@ -52,5 +51,4 @@ masking:
 
 logging:
   use_wandb: false
-  wandb_project: tcd-jepa-dist
-  log_dir: ./logs/dist_cifar10
+  log_dir: ./logs/debug_cifar10

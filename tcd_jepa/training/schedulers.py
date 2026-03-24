@@ -1,4 +1,8 @@
-"""Learning rate and weight decay schedulers. Adapted from I-JEPA (Meta Platforms, Inc.)."""
+"""Learning rate and weight decay schedulers.
+
+Adapted from I-JEPA (Meta/FAIR). Production-grade with proper warmup,
+cosine annealing, and final LR clamping.
+"""
 
 import math
 
@@ -6,7 +10,10 @@ import torch.optim
 
 
 class WarmupCosineSchedule:
-    """Warmup + cosine annealing learning rate schedule."""
+    """Linear warmup followed by cosine annealing to final_lr.
+
+    Matches the scheduler used in I-JEPA, DINO, and DINOv2.
+    """
 
     def __init__(
         self,
@@ -22,22 +29,21 @@ class WarmupCosineSchedule:
         self.ref_lr = ref_lr
         self.final_lr = final_lr
         self.warmup_steps = warmup_steps
-        self.T_max = T_max - warmup_steps
+        self.T_max = max(T_max - warmup_steps, 1)
         self._step = 0
 
     def step(self) -> float:
-        """Advance the schedule by one step. Returns the new learning rate."""
         self._step += 1
-        if self._step < self.warmup_steps:
+        if self._step <= self.warmup_steps:
             progress = float(self._step) / float(max(1, self.warmup_steps))
             new_lr = self.start_lr + progress * (self.ref_lr - self.start_lr)
         else:
-            progress = float(self._step - self.warmup_steps) / float(max(1, self.T_max))
-            new_lr = max(
-                self.final_lr,
-                self.final_lr
-                + (self.ref_lr - self.final_lr) * 0.5 * (1.0 + math.cos(math.pi * progress)),
+            progress = float(self._step - self.warmup_steps) / float(self.T_max)
+            progress = min(progress, 1.0)  # clamp for safety
+            new_lr = self.final_lr + (self.ref_lr - self.final_lr) * 0.5 * (
+                1.0 + math.cos(math.pi * progress)
             )
+            new_lr = max(new_lr, self.final_lr)
 
         for group in self.optimizer.param_groups:
             group["lr"] = new_lr
@@ -45,7 +51,11 @@ class WarmupCosineSchedule:
 
 
 class CosineWDSchedule:
-    """Cosine annealing weight decay schedule."""
+    """Cosine annealing weight decay schedule.
+
+    Ramps weight decay from ref_wd to final_wd over training.
+    I-JEPA uses increasing WD (0.05 -> 0.4) for ImageNet.
+    """
 
     def __init__(
         self,
@@ -57,13 +67,12 @@ class CosineWDSchedule:
         self.optimizer = optimizer
         self.ref_wd = ref_wd
         self.final_wd = final_wd
-        self.T_max = T_max
+        self.T_max = max(T_max, 1)
         self._step = 0
 
     def step(self) -> float:
-        """Advance the schedule by one step. Returns the new weight decay."""
         self._step += 1
-        progress = self._step / self.T_max
+        progress = min(self._step / self.T_max, 1.0)
         new_wd = self.final_wd + (self.ref_wd - self.final_wd) * 0.5 * (
             1.0 + math.cos(math.pi * progress)
         )

@@ -1,40 +1,40 @@
-# Distributed ImageNet config — 8x H100 GPUs
-# Target: ~20 minutes total training time
-# Dataset: 1.28M images, 224x224
-# Effective batch: 256 * 8 = 2048
-# Model: ViT-S/16 (22M params)
+# ImageNet config — 8x H100 GPUs
+# ViT-B/16, 300 epochs, matching I-JEPA paper hyperparameters
+# Effective batch: 128 * 8 = 1024
 
 model:
   encoder:
     img_size: 224
     patch_size: 16
     in_chans: 3
-    embed_dim: 384
+    embed_dim: 768
     depth: 12
-    num_heads: 6
+    num_heads: 12
     mlp_ratio: 4.0
+    drop_path_rate: 0.1
   predictor:
-    predictor_embed_dim: 192
-    predictor_depth: 6
-    num_heads: 6
+    predictor_embed_dim: 384
+    predictor_depth: 12
+    num_heads: 12
   ema:
     start: 0.996
     end: 1.0
 
 training:
-  epochs: 30
-  batch_size: 256        # per GPU — effective 2048
-  learning_rate: 0.001   # will be scaled by world_size (-> 0.008)
-  start_lr: 0.0001
-  final_lr: 0.00001
+  epochs: 300
+  batch_size: 128          # per GPU — effective 1024
+  learning_rate: 0.001     # scaled by effective_batch/256 automatically
+  start_lr: 0.00001
+  final_lr: 0.000001
   weight_decay: 0.05
   final_weight_decay: 0.4
-  warmup_epochs: 5
+  warmup_epochs: 40
   optimizer: adamw
   use_bfloat16: true
-  grad_clip: 1.0
-  checkpoint_freq: 10
+  grad_clip: 3.0
+  checkpoint_freq: 25
   seed: 42
+  collapse_weight: 0.01
 
 data:
   dataset: imagenet
@@ -47,10 +47,10 @@ masking:
   num_pred_masks: 1
   min_keep: 10
   enc_mask_scale: [0.15, 0.2]
-  pred_mask_scale: [0.2, 0.4]
+  pred_mask_scale: [0.15, 0.2]
   aspect_ratio: [0.75, 1.5]
 
 logging:
-  use_wandb: false
-  wandb_project: tcd-jepa-dist
-  log_dir: ./logs/dist_imagenet
+  use_wandb: true
+  wandb_project: tcd-jepa-imagenet
+  log_dir: ./logs/imagenet

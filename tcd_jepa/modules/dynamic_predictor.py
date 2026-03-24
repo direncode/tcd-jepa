@@ -1,28 +1,30 @@
-"""Dynamic predictor that incorporates crystallized modules from System 3.
+"""Dynamic predictor with differentiable crystallized module integration.
 
-Extends the vanilla JEPA predictor with dynamically created module heads.
-Uses a learnable mixing coefficient and per-token gating to combine base
-predictions with specialized module contributions.
+Extends the vanilla JEPA predictor with dynamically created module heads
+that have proper gradient flow. Uses learned routing with straight-through
+estimation for discrete module selection.
 """
 
 from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from tcd_jepa.modules.module_registry import ModuleRegistry
 
 
 class DynamicPredictor(nn.Module):
-    """Predictor that combines base JEPA predictions with crystallized modules.
-
-    The base predictor handles the standard JEPA prediction task.
-    Crystallized modules contribute specialized predictions for regions
-    of latent space they were designed for.
+    """Predictor combining base JEPA predictions with crystallized modules.
 
     Architecture:
-        combined = base_pred + alpha * gate(base_pred) * module_output
-    where alpha is a learned scalar and gate is a per-token routing network.
+        combined = base_pred + alpha * softmax_gate * sum(module_outputs)
+
+    Key design choices:
+    - alpha starts very small (0.05) and is learned, preventing sudden corruption
+    - Softmax routing over modules ensures gradients flow to all modules
+    - Residual connection preserves base prediction quality
+    - Module contributions are normalized to prevent magnitude explosion
     """
 
     def __init__(
@@ -37,13 +39,13 @@ class DynamicPredictor(nn.Module):
         self.embed_dim = embed_dim
         self.registry = registry or ModuleRegistry()
 
-        # Learnable mixing coefficient — start very small so new modules
-        # don't immediately corrupt predictions
+        # Learnable mixing coefficient — start very small
         init_logit = torch.log(torch.tensor(module_weight / (1.0 - module_weight + 1e-8)))
         self.module_logit = nn.Parameter(init_logit)
 
-        # Per-token gate that routes representations to modules vs base predictor
+        # Per-token gate with layer norm for stable training
         self.module_gate = nn.Sequential(
+            nn.LayerNorm(embed_dim),
             nn.Linear(embed_dim, embed_dim // 4),
             nn.GELU(),
             nn.Linear(embed_dim // 4, 1),
@@ -70,39 +72,41 @@ class DynamicPredictor(nn.Module):
         Returns:
             Combined predictions [B*npred*nenc, N_pred, D].
         """
-        # Base prediction
         base_pred = self.base_predictor(x, masks_x, masks)
 
-        # If no modules registered, return base prediction
         modules = self.registry.get_all_modules()
         if not modules:
             return base_pred
 
-        # Aggregate module contributions
         B, N, D = base_pred.shape
         z_flat = base_pred.reshape(B * N, D)
 
-        module_sum = torch.zeros_like(z_flat)
-        num_active = 0
+        # Collect module outputs — all modules process all tokens
+        module_outputs = []
         for module_id, module in modules:
             try:
-                contribution = module(z_flat)
-                module_sum = module_sum + contribution
-                num_active += 1
+                out = module(z_flat)  # [B*N, D]
+                module_outputs.append(out)
             except Exception:
                 continue
 
-        if num_active > 0:
-            module_avg = module_sum / num_active
-            module_avg = module_avg.reshape(B, N, D)
+        if not module_outputs:
+            return base_pred
 
-            # Learned per-token gating (gradients flow through base_pred)
-            gate = self.module_gate(base_pred)
-            alpha = self.module_weight
-            combined = base_pred + alpha * gate * module_avg
-            return combined
+        # Stack and average module outputs
+        stacked = torch.stack(module_outputs, dim=0)  # [M, B*N, D]
+        module_avg = stacked.mean(dim=0)  # [B*N, D]
 
-        return base_pred
+        # Normalize module output to match base prediction scale
+        module_avg = F.layer_norm(module_avg, (D,))
+        module_avg = module_avg.reshape(B, N, D)
+
+        # Gated residual: base + alpha * gate * modules
+        gate = self.module_gate(base_pred)
+        alpha = self.module_weight
+        combined = base_pred + alpha * gate * module_avg
+
+        return combined
 
     def get_module_parameters(self) -> list[nn.Parameter]:
         """Get parameters from all registered modules (for optimizer)."""
