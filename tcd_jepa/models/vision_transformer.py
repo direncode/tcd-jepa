@@ -11,6 +11,7 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 from tcd_jepa.utils.tensors import apply_masks, trunc_normal_
 
@@ -238,6 +239,7 @@ class VisionTransformer(nn.Module):
         self.norm = norm_layer(embed_dim)
 
         self.init_std = init_std
+        self._use_activation_checkpointing = False
         self.apply(self._init_weights)
         self._fix_init_weight()
 
@@ -298,10 +300,24 @@ class VisionTransformer(nn.Module):
             x = apply_masks(x, masks)
 
         for blk in self.blocks:
-            x = blk(x)
+            if self._use_activation_checkpointing and self.training:
+                x = torch_checkpoint(blk, x, use_reentrant=False)
+            else:
+                x = blk(x)
 
         x = self.norm(x)
         return x
+
+    def set_activation_checkpointing(self, enabled: bool = True) -> None:
+        """Enable or disable activation checkpointing for transformer blocks.
+
+        When enabled, intermediate activations are recomputed during backward
+        instead of stored, trading compute for memory.
+
+        Args:
+            enabled: Whether to enable activation checkpointing.
+        """
+        self._use_activation_checkpointing = enabled
 
 
 # -- Factory functions matching I-JEPA's interface --

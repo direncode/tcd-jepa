@@ -10,7 +10,7 @@ from tcd_jepa.models.context_encoder import ContextEncoder
 from tcd_jepa.models.target_encoder import TargetEncoder
 from tcd_jepa.models.vision_transformer import VisionTransformer
 from tcd_jepa.modules.predictor import VisionTransformerPredictor
-from tcd_jepa.training.losses import jepa_loss
+from tcd_jepa.training.losses import jepa_loss, tcd_auxiliary_loss
 from tcd_jepa.utils.tensors import apply_masks
 
 
@@ -85,6 +85,81 @@ class TCDJEPAModel(nn.Module):
     def update_target_encoder(self, momentum: float) -> None:
         """Update target encoder via EMA."""
         self.target_encoder.update_ema(self.context_encoder, momentum)
+
+    def forward_with_tcd(
+        self,
+        images: torch.Tensor,
+        masks_enc: list[torch.Tensor],
+        masks_pred: list[torch.Tensor],
+        langevin_sampler,
+        stream_encoder,
+        diff_steps: int = 5,
+        tcd_weight: float = 0.1,
+    ) -> dict[str, torch.Tensor]:
+        """Forward pass with differentiable TCD exploration.
+
+        Runs standard JEPA forward, then adds a TCD auxiliary loss computed
+        via differentiable Langevin steps through the energy landscape.
+
+        Args:
+            images: Input images [B, C, H, W].
+            masks_enc: Context mask indices.
+            masks_pred: Target mask indices.
+            langevin_sampler: LangevinSampler instance with differentiable_sample().
+            stream_encoder: StreamEncoder for energy function creation.
+            diff_steps: Number of differentiable Langevin steps.
+            tcd_weight: Weight for the TCD auxiliary loss.
+
+        Returns:
+            Dictionary with 'loss', 'jepa_loss', 'tcd_loss', 'predictions',
+            'targets', 'energy_mean', and 'module_weight'.
+        """
+        # Standard JEPA forward
+        z = self.context_encoder(images, masks=masks_enc)
+        z_pred = self.predictor(z, masks_enc, masks_pred)
+
+        with torch.no_grad():
+            h = self.target_encoder(images, masks=masks_pred)
+            h = h.repeat(len(masks_enc), 1, 1)
+
+        loss_jepa = jepa_loss(z_pred, h.detach())
+
+        # TCD: differentiable Langevin exploration
+        # Use mean context representation as starting point
+        z_mean = z.mean(dim=1)  # [B, D]
+
+        # Create differentiable energy function
+        with torch.no_grad():
+            h_full = self.target_encoder(images)
+        energy_fn = stream_encoder.make_energy_fn(h_full, differentiable=True)
+
+        # Compute energy before exploration
+        energy_pre = energy_fn(z_mean)
+
+        # Run differentiable Langevin steps
+        z_explored = langevin_sampler.differentiable_sample(
+            z_mean, energy_fn, num_diff_steps=diff_steps,
+        )
+        energy_post = energy_fn(z_explored)
+
+        # Get module weights for regularization
+        if self._has_dynamic_predictor:
+            module_weights = self.predictor.module_weight.unsqueeze(0)
+        else:
+            module_weights = torch.ones(1, device=images.device)
+
+        tcd_loss = tcd_auxiliary_loss(energy_pre, energy_post, module_weights)
+        total_loss = loss_jepa + tcd_weight * tcd_loss
+
+        return {
+            "loss": total_loss,
+            "jepa_loss": loss_jepa,
+            "tcd_loss": tcd_loss,
+            "predictions": z_pred,
+            "targets": h,
+            "energy_mean": energy_post.mean(),
+            "module_weight": module_weights.mean(),
+        }
 
     def set_module_registry(self, registry) -> None:
         """Share a ModuleRegistry with the dynamic predictor.

@@ -128,3 +128,90 @@ class LangevinSampler:
             trajectory.append(z.clone())
 
         return torch.stack(trajectory, dim=0)  # [T, B, D]
+
+    def differentiable_step(
+        self,
+        z: torch.Tensor,
+        energy_fn: callable,
+        temperature_map: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Take one differentiable Langevin step using create_graph=True.
+
+        Unlike `step()`, this preserves the computation graph so gradients
+        can flow back through the Langevin dynamics for end-to-end training.
+        Uses the reparameterization trick for the noise term.
+
+        Args:
+            z: Current latent positions [B, D], must have requires_grad=True.
+            energy_fn: Maps [B, D] -> energy (must be differentiable).
+            temperature_map: Per-sample temperature [B].
+
+        Returns:
+            Updated positions [B, D] with gradient graph intact.
+        """
+        with torch.enable_grad():
+            z_var = z if z.requires_grad else z.requires_grad_(True)
+            energy = energy_fn(z_var)
+            if energy.dim() > 0:
+                energy = energy.sum()
+            grad = torch.autograd.grad(energy, z_var, create_graph=True)[0]
+
+        # Clip gradients for stability
+        grad_norm = grad.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        grad = grad * torch.clamp(self.grad_clip / grad_norm, max=1.0)
+
+        if temperature_map is not None:
+            beta = temperature_map.unsqueeze(-1)
+        else:
+            beta = torch.full((z.shape[0], 1), self.temperature, device=z.device)
+        beta = beta.clamp(min=self.min_temperature)
+
+        # Reparameterization trick: noise is detached but scale is differentiable
+        noise_scale = torch.sqrt(2.0 * self.step_size / beta)
+        noise = torch.randn_like(z).detach() * noise_scale
+
+        z_new = z - self.step_size * grad + noise
+        return z_new
+
+    def differentiable_sample(
+        self,
+        z_init: torch.Tensor,
+        energy_fn: callable,
+        num_warmup_steps: int = 10,
+        num_diff_steps: Optional[int] = None,
+        blank_score: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Run detached warmup followed by K differentiable final steps.
+
+        This enables end-to-end gradient flow through the final exploration
+        steps while keeping the warmup phase detached for efficiency.
+
+        Args:
+            z_init: Starting positions [B, D].
+            energy_fn: Energy function (must support create_graph=True).
+            num_warmup_steps: Number of initial detached warmup steps.
+            num_diff_steps: Number of final differentiable steps (default 5).
+            blank_score: Per-sample blank space score [B].
+
+        Returns:
+            Final positions [B, D] with gradient graph from diff steps.
+        """
+        num_diff_steps = num_diff_steps or 5
+
+        # Temperature map from blank scores
+        if blank_score is not None:
+            temperature_map = self.temperature / (1.0 + blank_score)
+        else:
+            temperature_map = None
+
+        # Phase 1: Detached warmup (no gradient tracking)
+        z = z_init.detach().clone()
+        for _ in range(num_warmup_steps):
+            z = self.step(z, energy_fn, temperature_map)
+
+        # Phase 2: Differentiable final steps
+        z = z.requires_grad_(True)
+        for _ in range(num_diff_steps):
+            z = self.differentiable_step(z, energy_fn, temperature_map)
+
+        return z

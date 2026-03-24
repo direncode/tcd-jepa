@@ -49,6 +49,7 @@ class StreamEncoder:
     def make_energy_fn(
         self,
         target_representations: torch.Tensor,
+        differentiable: bool = False,
     ) -> callable:
         """Create an energy function for System 2.
 
@@ -57,6 +58,8 @@ class StreamEncoder:
 
         Args:
             target_representations: Target encoder outputs [B, N, D] or [B, D].
+            differentiable: If True, keeps targets in the computation graph
+                so gradients can flow back through the energy landscape.
 
         Returns:
             Callable mapping [B, D] -> [B] energy.
@@ -66,16 +69,20 @@ class StreamEncoder:
         else:
             target_mean = target_representations
 
-        target_detached = target_mean.detach()
+        if differentiable:
+            # Keep targets in the computation graph for gradient flow
+            target = target_mean
+        else:
+            target = target_mean.detach()
 
         def energy_fn(z: torch.Tensor) -> torch.Tensor:
             # Broadcast: if z has more samples than targets, tile targets
             B_z = z.shape[0]
-            B_t = target_detached.shape[0]
+            B_t = target.shape[0]
             if B_z != B_t:
-                t = target_detached.repeat((B_z + B_t - 1) // B_t, 1)[:B_z]
+                t = target.repeat((B_z + B_t - 1) // B_t, 1)[:B_z]
             else:
-                t = target_detached
+                t = target
             return (z - t).pow(2).sum(dim=-1)
 
         return energy_fn

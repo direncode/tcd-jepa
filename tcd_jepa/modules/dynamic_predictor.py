@@ -1,16 +1,49 @@
 """Dynamic predictor that incorporates crystallized modules from System 3.
 
 Extends the vanilla JEPA predictor with dynamically created module heads.
-Uses a learnable mixing coefficient and per-token gating to combine base
-predictions with specialized module contributions.
+Uses a learned soft router (ModuleRouter) with per-module weights via softmax,
+per-token gating for spatial selectivity, and output normalization.
 """
 
+import logging
 from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from tcd_jepa.modules.module_registry import ModuleRegistry
+
+logger = logging.getLogger("tcd_jepa")
+
+
+class ModuleRouter(nn.Module):
+    """Learned soft router that assigns per-module weights via softmax.
+
+    Routes input representations to crystallized modules with learned
+    importance weights, enabling gradient-based module selection.
+    """
+
+    def __init__(self, embed_dim: int, max_modules: int = 64) -> None:
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.max_modules = max_modules
+        self.router_proj = nn.Linear(embed_dim, max_modules)
+        nn.init.zeros_(self.router_proj.weight)
+        nn.init.zeros_(self.router_proj.bias)
+
+    def forward(self, x: torch.Tensor, num_active: int) -> torch.Tensor:
+        """Compute soft routing weights over active modules.
+
+        Args:
+            x: Input representations [B, D].
+            num_active: Number of currently active modules.
+
+        Returns:
+            Routing weights [B, num_active] summing to 1 per sample.
+        """
+        logits = self.router_proj(x)[:, :num_active]  # [B, num_active]
+        return F.softmax(logits, dim=-1)
 
 
 class DynamicPredictor(nn.Module):
@@ -21,8 +54,9 @@ class DynamicPredictor(nn.Module):
     of latent space they were designed for.
 
     Architecture:
-        combined = base_pred + alpha * gate(base_pred) * module_output
-    where alpha is a learned scalar and gate is a per-token routing network.
+        combined = base_pred + alpha * token_gate(base_pred) * module_norm(routed_modules)
+    where alpha is a learned scalar, token_gate provides spatial selectivity,
+    and module_norm normalizes module outputs.
     """
 
     def __init__(
@@ -42,13 +76,19 @@ class DynamicPredictor(nn.Module):
         init_logit = torch.log(torch.tensor(module_weight / (1.0 - module_weight + 1e-8)))
         self.module_logit = nn.Parameter(init_logit)
 
-        # Per-token gate that routes representations to modules vs base predictor
-        self.module_gate = nn.Sequential(
+        # Learned soft router for per-module weighting
+        self.module_router = ModuleRouter(embed_dim)
+
+        # Per-token gate for spatial selectivity
+        self.token_gate = nn.Sequential(
             nn.Linear(embed_dim, embed_dim // 4),
             nn.GELU(),
             nn.Linear(embed_dim // 4, 1),
             nn.Sigmoid(),
         )
+
+        # Output normalization for module contributions
+        self.module_norm = nn.LayerNorm(embed_dim)
 
     @property
     def module_weight(self) -> torch.Tensor:
@@ -70,7 +110,7 @@ class DynamicPredictor(nn.Module):
         Returns:
             Combined predictions [B*npred*nenc, N_pred, D].
         """
-        # Base prediction
+        # Base prediction — no exception swallowing, let errors propagate
         base_pred = self.base_predictor(x, masks_x, masks)
 
         # If no modules registered, return base prediction
@@ -78,35 +118,43 @@ class DynamicPredictor(nn.Module):
         if not modules:
             return base_pred
 
-        # Aggregate module contributions
+        # Aggregate module contributions with learned routing
         B, N, D = base_pred.shape
         z_flat = base_pred.reshape(B * N, D)
 
-        module_sum = torch.zeros_like(z_flat)
-        num_active = 0
+        # Compute per-module routing weights
+        z_mean = z_flat.mean(dim=0, keepdim=True).expand(B * N, -1)
+        routing_weights = self.module_router(z_mean, len(modules))  # [B*N, M]
+
+        # Compute weighted module contributions
+        module_outputs = []
         for module_id, module in modules:
-            try:
-                contribution = module(z_flat)
-                module_sum = module_sum + contribution
-                num_active += 1
-            except Exception:
-                continue
+            contribution = module(z_flat)  # [B*N, D]
+            module_outputs.append(contribution)
 
-        if num_active > 0:
-            module_avg = module_sum / num_active
-            module_avg = module_avg.reshape(B, N, D)
+        if module_outputs:
+            # Stack and apply routing: [B*N, M, D] * [B*N, M, 1] -> [B*N, D]
+            stacked = torch.stack(module_outputs, dim=1)  # [B*N, M, D]
+            weights = routing_weights.unsqueeze(-1)  # [B*N, M, 1]
+            module_combined = (stacked * weights).sum(dim=1)  # [B*N, D]
 
-            # Learned per-token gating (gradients flow through base_pred)
-            gate = self.module_gate(base_pred)
+            # Normalize module output
+            module_combined = self.module_norm(module_combined)
+            module_combined = module_combined.reshape(B, N, D)
+
+            # Learned per-token gating for spatial selectivity
+            gate = self.token_gate(base_pred)  # [B, N, 1]
             alpha = self.module_weight
-            combined = base_pred + alpha * gate * module_avg
+            combined = base_pred + alpha * gate * module_combined
             return combined
 
         return base_pred
 
     def get_module_parameters(self) -> list[nn.Parameter]:
         """Get parameters from all registered modules (for optimizer)."""
-        params = list(self.module_gate.parameters())
+        params = list(self.token_gate.parameters())
+        params.extend(self.module_router.parameters())
+        params.extend(self.module_norm.parameters())
         params.append(self.module_logit)
         for _, module in self.registry.get_all_modules():
             params.extend(module.parameters())
