@@ -1,5 +1,4 @@
-# Debug CIFAR-10 config — fast validation run
-# ~2 minutes on 8x H100
+# Debug CIFAR-10 config — fast validation run (~2 min on 8x H100)
 
 model:
   encoder:
@@ -42,11 +41,11 @@ data:
   data_dir: ./data
 
 masking:
-  num_enc_masks: 4
-  num_pred_masks: 1
+  num_enc_masks: 1
+  num_pred_masks: 4
   min_keep: 4
-  enc_mask_scale: [0.15, 0.2]
-  pred_mask_scale: [0.2, 0.4]
+  enc_mask_scale: [0.85, 1.0]
+  pred_mask_scale: [0.15, 0.2]
   aspect_ratio: [0.75, 1.5]
 
 logging:

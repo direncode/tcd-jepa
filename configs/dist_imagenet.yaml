@@ -1,5 +1,5 @@
 # ImageNet config — 8x H100 GPUs
-# ViT-B/16, 300 epochs, matching I-JEPA paper hyperparameters
+# ViT-B/16, 300 epochs, matching I-JEPA paper hyperparameters exactly
 # Effective batch: 128 * 8 = 1024
 
 model:
@@ -26,9 +26,9 @@ training:
   learning_rate: 0.001     # scaled by effective_batch/256 automatically
   start_lr: 0.00001
   final_lr: 0.000001
-  weight_decay: 0.05
+  weight_decay: 0.04
   final_weight_decay: 0.4
-  warmup_epochs: 40
+  warmup_epochs: 15
   optimizer: adamw
   use_bfloat16: true
   grad_clip: 3.0
@@ -42,12 +42,13 @@ data:
   num_workers: 12
   data_dir: ./data/imagenet
 
+# Exact I-JEPA paper masking
 masking:
-  num_enc_masks: 4
-  num_pred_masks: 1
+  num_enc_masks: 1           # 1 large context block
+  num_pred_masks: 4          # 4 small target blocks
   min_keep: 10
-  enc_mask_scale: [0.15, 0.2]
-  pred_mask_scale: [0.15, 0.2]
+  enc_mask_scale: [0.85, 1.0]    # context sees 85-100%
+  pred_mask_scale: [0.15, 0.2]   # each target is 15-20%
   aspect_ratio: [0.75, 1.5]
 
 logging:
