@@ -133,6 +133,7 @@ def main():
     parser = argparse.ArgumentParser(description="Train TCD-JEPA")
     parser.add_argument("--config", required=True, help="Path to YAML config")
     parser.add_argument("--tcd", action="store_true", help="Enable TCD recursive loop")
+    parser.add_argument("--backend", choices=["langevin", "ocean"], default="langevin", help="Physics backend for System 2")
     parser.add_argument("overrides", nargs="*", help="Config overrides (e.g., training.epochs=10)")
     args = parser.parse_args()
 
@@ -218,15 +219,34 @@ def main():
     recursive_loop = None
     stream_encoder = None
     if args.tcd:
+        tcd_cfg = cfg.get("tcd", {})
+        backend = None
+        backend_choice = args.backend
+        if tcd_cfg.get("physics_backend") == "ocean":
+            backend_choice = "ocean"
+
+        if backend_choice == "ocean":
+            from ocean_core import OceanConfig, set_config
+            from tcd_jepa.backends.ocean import OceanBackend
+            ocean_cfg = cfg.get("ocean", {})
+            set_config(OceanConfig(
+                shcg_base_dimension=ocean_cfg.get("shcg_base_dimension", 64),
+                btut_l_max=ocean_cfg.get("btut_l_max", 128),
+                irdb_max_entities=ocean_cfg.get("irdb_max_entities", 500000),
+                embedding_model=ocean_cfg.get("embedding_model", "all-MiniLM-L6-v2"),
+            ))
+            backend = OceanBackend(embed_dim=enc_cfg["embed_dim"])
+            logger.info("Using Ocean physics backend")
+
         recursive_loop = RecursiveLoop(
             embed_dim=enc_cfg["embed_dim"],
-            explore_every=2,
-            crystallize_every=5,
-            langevin_steps=20,
+            explore_every=tcd_cfg.get("explore_every", 2),
+            crystallize_every=tcd_cfg.get("crystallize_every", 5),
+            langevin_steps=tcd_cfg.get("langevin_steps", 20),
             device=device,
+            backend=backend,
         )
         stream_encoder = StreamEncoder(model.context_encoder, model.target_encoder)
-        # Share crystallizer's registry with the dynamic predictor
         model.set_module_registry(recursive_loop.crystallizer.registry)
         logger.info("TCD recursive loop enabled")
 
