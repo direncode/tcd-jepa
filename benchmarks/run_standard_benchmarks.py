@@ -24,6 +24,7 @@ Usage:
 
 import argparse
 import copy
+import gc
 import json
 import logging
 import os
@@ -373,15 +374,16 @@ def pretrain(cfg, dataset_name, data_dir, device, use_tcd=False):
     ssl_dataset = get_ssl_dataset(dataset_name, data_dir, img_size)
     logger.info(f"[{method}] SSL dataset: {len(ssl_dataset)} samples")
 
+    num_workers = train_cfg.get("num_workers", cfg.get("data", {}).get("num_workers", 4))
     dataloader = DataLoader(
         ssl_dataset,
         batch_size=train_cfg["batch_size"],
         shuffle=True,
-        num_workers=train_cfg.get("num_workers", cfg.get("data", {}).get("num_workers", 8)),
+        num_workers=num_workers,
         collate_fn=mask_collator,
         drop_last=True,
         pin_memory=True,
-        persistent_workers=True,
+        persistent_workers=num_workers > 0,
     )
 
     # Schedulers
@@ -432,10 +434,9 @@ def pretrain(cfg, dataset_name, data_dir, device, use_tcd=False):
         wandb_config={**cfg, "method": method, "dataset": dataset_name},
     )
 
-    # Mixed precision
-    scaler = None
-    if train_cfg.get("use_bfloat16", False) and device.type == "cuda":
-        scaler = torch.amp.GradScaler()
+    # Mixed precision — bfloat16 doesn't need GradScaler (same dynamic range as fp32)
+    use_amp = train_cfg.get("use_bfloat16", False) and device.type == "cuda"
+    scaler = None  # GradScaler only needed for float16, not bfloat16
 
     # Trainer
     checkpoint_dir = f"{run_log_dir}/checkpoints"
@@ -453,6 +454,8 @@ def pretrain(cfg, dataset_name, data_dir, device, use_tcd=False):
         scaler=scaler,
         recursive_loop=recursive_loop,
         stream_encoder=stream_encoder,
+        use_amp=use_amp,
+        amp_dtype=torch.bfloat16,
     )
 
     logger.info(f"[{method}] Starting pretraining...")
@@ -464,7 +467,15 @@ def pretrain(cfg, dataset_name, data_dir, device, use_tcd=False):
     metric_logger.close()
     num_modules = recursive_loop.num_modules if recursive_loop else 0
 
-    return model.context_encoder, train_time, num_modules
+    # Clean up to free GPU memory before evaluation
+    encoder = model.context_encoder
+    del trainer, dataloader, optimizer, lr_scheduler, wd_scheduler
+    del recursive_loop, stream_encoder
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
+    return encoder, train_time, num_modules
 
 
 # ── Main benchmark ────────────────────────────────────────────────────────────
@@ -502,48 +513,58 @@ def run_single_benchmark(dataset_name, cfg, seeds=(42,)):
             label = "TCD-JEPA" if use_tcd else "Vanilla JEPA"
             logger.info(f"\n>>> {label} (seed={seed})")
 
-            # Pretrain
-            encoder, train_time, num_modules = pretrain(
-                cfg, dataset_name, data_dir, device, use_tcd=use_tcd)
+            try:
+                # Pretrain
+                encoder, train_time, num_modules = pretrain(
+                    cfg, dataset_name, data_dir, device, use_tcd=use_tcd)
 
-            # Extract features
-            logger.info(f"[{label}] Extracting features...")
-            train_feats, train_labels = extract_features(encoder, train_loader, device)
-            test_feats, test_labels = extract_features(encoder, test_loader, device)
-            logger.info(f"[{label}] Features: train={train_feats.shape}, test={test_feats.shape}")
+                # Extract features
+                logger.info(f"[{label}] Extracting features...")
+                train_feats, train_labels = extract_features(encoder, train_loader, device)
+                test_feats, test_labels = extract_features(encoder, test_loader, device)
+                logger.info(f"[{label}] Features: train={train_feats.shape}, test={test_feats.shape}")
 
-            # Linear probe
-            logger.info(f"[{label}] Linear probe ({num_classes} classes)...")
-            lin_acc = linear_probe(
-                train_feats, train_labels, test_feats, test_labels,
-                embed_dim=embed_dim, num_classes=num_classes, device=device)
-            logger.info(f"[{label}] Linear probe: {lin_acc:.2f}%")
+                # Linear probe
+                logger.info(f"[{label}] Linear probe ({num_classes} classes)...")
+                lin_acc = linear_probe(
+                    train_feats, train_labels, test_feats, test_labels,
+                    embed_dim=embed_dim, num_classes=num_classes, device=device)
+                logger.info(f"[{label}] Linear probe: {lin_acc:.2f}%")
 
-            # k-NN
-            logger.info(f"[{label}] k-NN evaluation...")
-            knn_results = knn_evaluate(
-                train_feats, train_labels, test_feats, test_labels, device=device)
-            logger.info(f"[{label}] k-NN: {knn_results}")
+                # k-NN
+                logger.info(f"[{label}] k-NN evaluation...")
+                knn_results = knn_evaluate(
+                    train_feats, train_labels, test_feats, test_labels, device=device)
+                logger.info(f"[{label}] k-NN: {knn_results}")
 
-            # Representation quality
-            quality = representation_quality(test_feats)
-            logger.info(f"[{label}] Quality: {quality}")
+                # Representation quality
+                quality = representation_quality(test_feats)
+                logger.info(f"[{label}] Quality: {quality}")
 
-            result = {
-                "seed": seed,
-                "method": method_name,
-                "linear_probe_acc": lin_acc,
-                **knn_results,
-                **quality,
-                "train_time_s": train_time,
-                "train_time_h": train_time / 3600,
-                "num_modules": num_modules,
-                "epochs": cfg["training"]["epochs"],
-            }
-            all_results[method_name].append(result)
+                result = {
+                    "seed": seed,
+                    "method": method_name,
+                    "linear_probe_acc": lin_acc,
+                    **knn_results,
+                    **quality,
+                    "train_time_s": train_time,
+                    "train_time_h": train_time / 3600,
+                    "num_modules": num_modules,
+                    "epochs": cfg["training"]["epochs"],
+                }
+                all_results[method_name].append(result)
 
-            # Save incremental results
-            save_results(all_results, dataset_name)
+                # Save incremental results
+                save_results(all_results, dataset_name)
+
+            except Exception as e:
+                logger.error(f"[{label}] FAILED (seed={seed}): {e}", exc_info=True)
+            finally:
+                # Free GPU memory between runs
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                import gc
+                gc.collect()
 
     return all_results
 

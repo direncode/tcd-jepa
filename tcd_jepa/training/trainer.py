@@ -41,6 +41,8 @@ class Trainer:
         scaler: Optional[torch.amp.GradScaler] = None,
         recursive_loop=None,
         stream_encoder=None,
+        use_amp: bool = False,
+        amp_dtype: torch.dtype = torch.bfloat16,
     ):
         self.model = model
         self.optimizer = optimizer
@@ -56,6 +58,8 @@ class Trainer:
         self.scaler = scaler
         self.recursive_loop = recursive_loop
         self.stream_encoder = stream_encoder
+        self.use_amp = use_amp
+        self.amp_dtype = amp_dtype
         self.global_step = 0
         self._known_module_ids: set[str] = set()
 
@@ -166,9 +170,14 @@ class Trainer:
         masks_enc = [m.to(self.device) for m in masks_enc]
         masks_pred = [m.to(self.device) for m in masks_pred]
 
-        # Forward pass
-        result = self.model(images, masks_enc, masks_pred)
-        loss = result["loss"]
+        # Forward pass with optional mixed precision
+        with torch.amp.autocast(
+            device_type=self.device.type,
+            dtype=self.amp_dtype,
+            enabled=self.use_amp,
+        ):
+            result = self.model(images, masks_enc, masks_pred)
+            loss = result["loss"]
 
         # Backward pass
         self.optimizer.zero_grad()
