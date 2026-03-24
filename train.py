@@ -157,6 +157,7 @@ def main():
     model = build_tcd_jepa(
         img_size=img_size,
         patch_size=patch_size,
+        in_chans=enc_cfg.get("in_chans", 3),
         embed_dim=enc_cfg["embed_dim"],
         depth=enc_cfg["depth"],
         num_heads=enc_cfg["num_heads"],

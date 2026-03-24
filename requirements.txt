@@ -7,6 +7,7 @@ seaborn
 pyyaml
 einops
 tqdm
+Pillow
 
 # Optional
 # giotto-tda    # For persistent homology (Phase 3)
