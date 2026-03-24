@@ -12,10 +12,8 @@ Attention captures inter-entity relationships; TCD crystallizer discovers the to
 """
 
 import math
-from functools import partial
 from typing import Optional
 
-import numpy as np
 import torch
 import torch.nn as nn
 

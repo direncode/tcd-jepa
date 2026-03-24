@@ -8,7 +8,6 @@ Temperature beta is biased toward blank space regions (lower beta = more explora
 from typing import Optional
 
 import torch
-import torch.nn as nn
 
 
 class LangevinSampler:

@@ -1,11 +1,10 @@
 """Tests for System 1 (context encoder) and related components."""
 
 import torch
-import pytest
 
-from tcd_jepa.models.vision_transformer import VisionTransformer, vit_small, vit_tiny
 from tcd_jepa.models.context_encoder import ContextEncoder
 from tcd_jepa.models.target_encoder import TargetEncoder, momentum_schedule
+from tcd_jepa.models.vision_transformer import VisionTransformer, vit_tiny
 from tcd_jepa.utils.tensors import apply_masks, trunc_normal_
 
 

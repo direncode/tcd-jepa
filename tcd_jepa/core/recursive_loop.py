@@ -14,7 +14,6 @@ Convergence:
 """
 
 from typing import Optional
-from collections import deque
 
 import torch
 import torch.distributed as dist

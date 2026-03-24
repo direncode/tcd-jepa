@@ -7,11 +7,9 @@ Systems 2 and 3 interact with.
 from typing import Optional
 
 import torch
-import torch.nn as nn
 
 from tcd_jepa.models.context_encoder import ContextEncoder
 from tcd_jepa.models.target_encoder import TargetEncoder
-from tcd_jepa.core.energy_landscape import compute_energy
 
 
 class StreamEncoder:

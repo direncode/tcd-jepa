@@ -8,9 +8,6 @@ Self-reflexive analysis:
 """
 
 import logging
-from typing import Optional
-
-import torch
 
 from tcd_jepa.manifold.insight_engine import Insight
 from tcd_jepa.manifold.lineage import make_lineage_id
@@ -119,7 +116,7 @@ class MetaIntelligenceEngine:
 
         # Categorize insights by reliability
         high_confidence = [i for i in all_insights if i.confidence > 0.75 and i.sensitivity > 0.5]
-        low_confidence = [i for i in all_insights if i.confidence < 0.5]
+        _low_confidence = [i for i in all_insights if i.confidence < 0.5]
         with_contradictions = [i for i in all_insights if i.contradicts]
         with_sensitivity = [i for i in all_insights if i.sensitivity > 0]
 
@@ -158,7 +155,7 @@ class MetaIntelligenceEngine:
         insights = []
 
         coverage = profile.coverage_ratio
-        num_modules = profile.num_modules
+        _num_modules = profile.num_modules
         betti = profile.betti_numbers
 
         recommendations = []

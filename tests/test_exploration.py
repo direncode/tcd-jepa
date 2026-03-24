@@ -1,11 +1,11 @@
 """Unit tests for exploration modules: Langevin, BlankSpace, Fisher, Trajectory."""
 
-import torch
 import pytest
+import torch
 
-from tcd_jepa.exploration.langevin import LangevinSampler
 from tcd_jepa.exploration.blank_space_detector import BlankSpaceDetector
 from tcd_jepa.exploration.fisher_metric import FisherMetric
+from tcd_jepa.exploration.langevin import LangevinSampler
 from tcd_jepa.exploration.trajectory_tracker import TrajectoryTracker
 
 
@@ -99,8 +99,8 @@ class TestLangevinSampler:
         # Lower temperature -> larger noise -> more change from z
         # Actually low temp means low beta -> noise_scale = sqrt(2*eta/beta) -> larger noise
         # So low temp should produce more change
-        diff_low = (z_low - z).pow(2).sum()
-        diff_high = (z_high - z).pow(2).sum()
+        _diff_low = (z_low - z).pow(2).sum()
+        _diff_high = (z_high - z).pow(2).sum()
         # Just verify they produce different outputs
         assert not torch.allclose(z_low, z_high)
 
@@ -134,7 +134,7 @@ class TestBlankSpaceDetector:
         """Perturbation variance should be computed when predictor_fn is given."""
         detector = BlankSpaceDetector(num_perturbations=5)
         z = torch.randn(4, 8)
-        predictor_fn = lambda x: x * 2  # Simple linear predictor
+        def predictor_fn(x): return x * 2  # Simple linear predictor
         result = detector.detect(z, _quadratic_energy, predictor_fn=predictor_fn)
         assert result["variance_score"].shape == (4,)
         assert (result["variance_score"] >= 0).all()
@@ -192,7 +192,7 @@ class TestFisherMetric:
         sigma2 = 1.0
         fisher = FisherMetric(noise_variance=sigma2, num_jacobian_samples=8)
         z = torch.zeros(1, 16)
-        identity_fn = lambda x: x
+        def identity_fn(x): return x
         trace = fisher.compute_metric_tensor_trace(z, identity_fn)
         # Each Jacobian column is a random direction, J^T J trace ~ K
         assert trace.item() > 0

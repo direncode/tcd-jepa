@@ -13,20 +13,18 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from tcd_jepa.utils.config import load_config_with_overrides
-from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
-from tcd_jepa.models.target_encoder import momentum_schedule
-from tcd_jepa.training.trainer import build_optimizer
-from tcd_jepa.training.schedulers import WarmupCosineSchedule, CosineWDSchedule
 from tcd_jepa.core.recursive_loop import RecursiveLoop
 from tcd_jepa.core.system1_encoder import StreamEncoder
+from tcd_jepa.models.target_encoder import momentum_schedule
+from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
+from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
+from tcd_jepa.training.trainer import build_optimizer
+from tcd_jepa.utils.config import load_config_with_overrides
 from tcd_jepa.utils.masking import MaskCollator
 
 logging.basicConfig(level=logging.INFO)
@@ -505,7 +503,6 @@ def run_multi_seed(
     }
 
     # Per-epoch averaged loss curves
-    max_epochs = max(len(r["vanilla"]["losses"]) for r in all_results)
     vanilla_curves = np.array([r["vanilla"]["losses"] for r in all_results])
     tcd_curves = np.array([r["tcd"]["losses"] for r in all_results])
     stats["avg_vanilla_curve"] = vanilla_curves.mean(axis=0).tolist()

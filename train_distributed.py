@@ -17,10 +17,8 @@ Usage:
 """
 
 import argparse
-import glob
 import logging
 import os
-import re
 import time
 import traceback
 from pathlib import Path
@@ -39,9 +37,8 @@ from torch.utils.data.distributed import DistributedSampler
 from tcd_jepa.core.recursive_loop import RecursiveLoop
 from tcd_jepa.core.system1_encoder import StreamEncoder
 from tcd_jepa.exploration.langevin import LangevinSampler
-from tcd_jepa.models.tcd_jepa_model import TCDJEPAModel, build_tcd_jepa
 from tcd_jepa.models.target_encoder import momentum_schedule
-from tcd_jepa.training.losses import jepa_loss
+from tcd_jepa.models.tcd_jepa_model import TCDJEPAModel, build_tcd_jepa
 from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
 from tcd_jepa.training.trainer import build_optimizer
 from tcd_jepa.utils.checkpointing import load_checkpoint, save_checkpoint
@@ -64,9 +61,11 @@ def wrap_fsdp(model: TCDJEPAModel, device_id: int) -> nn.Module:
     """
     from torch.distributed.fsdp import (
         BackwardPrefetch,
-        FullyShardedDataParallel as FSDP,
         MixedPrecision,
         ShardingStrategy,
+    )
+    from torch.distributed.fsdp import (
+        FullyShardedDataParallel as FSDP,
     )
     from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
@@ -627,7 +626,7 @@ def main() -> None:
     if train_cfg.get("strategy"):
         strategy = train_cfg["strategy"] if args.strategy == "ddp" else args.strategy
     activation_ckpt = args.activation_checkpointing or train_cfg.get("activation_checkpointing", False)
-    max_retries = args.max_retries if args.max_retries != 3 else train_cfg.get("max_retries", 3)
+    _ = args.max_retries if args.max_retries != 3 else train_cfg.get("max_retries", 3)
     barrier_freq = train_cfg.get("monitored_barrier_freq", 100)
 
     # Seed (per-rank for different data augmentation)

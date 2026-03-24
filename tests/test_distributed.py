@@ -7,10 +7,10 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-import pytest
 
 from tcd_jepa.core.recursive_loop import ConvergenceMonitor
 

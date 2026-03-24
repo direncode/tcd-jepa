@@ -19,7 +19,6 @@ import torch.nn as nn
 from tcd_jepa.manifold.encoder import ManifoldTransformer
 from tcd_jepa.modules.predictor import VisionTransformerPredictor
 from tcd_jepa.training.losses import jepa_loss
-from tcd_jepa.utils.tensors import apply_masks
 
 
 class ManifoldContextEncoder(nn.Module):

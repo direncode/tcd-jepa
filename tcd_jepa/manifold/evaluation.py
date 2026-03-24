@@ -13,9 +13,7 @@ Latent Ocean KPIs (mapped from TCD topology):
 8. Risk Horizon ← H2 boundaries (entities at cluster interfaces)
 """
 
-from typing import Optional
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

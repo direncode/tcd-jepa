@@ -1,18 +1,16 @@
 """Integration tests for the full TCD-JEPA model."""
 
 import torch
-import pytest
 
-from tcd_jepa.models.tcd_jepa_model import TCDJEPAModel, build_tcd_jepa
-from tcd_jepa.modules.predictor import VisionTransformerPredictor, vit_predictor
 from tcd_jepa.core.energy_landscape import (
     compute_energy,
     compute_energy_statistics,
-    compute_smooth_l1_energy,
 )
-from tcd_jepa.training.losses import jepa_loss, l2_loss
-from tcd_jepa.training.schedulers import WarmupCosineSchedule, CosineWDSchedule
+from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
+from tcd_jepa.modules.predictor import vit_predictor
+from tcd_jepa.training.losses import jepa_loss
 from tcd_jepa.training.metrics import TrainingMetrics
+from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
 
 
 class TestPredictor:

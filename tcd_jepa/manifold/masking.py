@@ -12,7 +12,6 @@ The JEPA objective becomes: given context entities at scattered S² positions,
 predict the latent representations of entities in a target geodesic neighborhood.
 """
 
-import math
 from multiprocessing import Value
 from typing import Optional
 

@@ -27,7 +27,10 @@ import numpy as np
 import torch
 
 from tcd_jepa.manifold.lineage import (
-    ChunkNode, LinkNode, ClusterNode, LineageGraph, make_lineage_id,
+    ChunkNode,
+    LineageGraph,
+    LinkNode,
+    make_lineage_id,
 )
 from tcd_jepa.manifold.sparse_graph import SparseAdjacency
 
@@ -727,8 +730,6 @@ class DocumentProcessor:
 
         Uses document ID as primary grouping, with spectral refinement.
         """
-        N = len(chunks)
-
         # Group by document
         doc_ids = list(set(c.doc_id for c in chunks))
         doc_to_label = {doc_id: i for i, doc_id in enumerate(doc_ids)}

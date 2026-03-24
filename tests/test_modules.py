@@ -3,18 +3,16 @@
 import numpy as np
 import torch
 import torch.nn as nn
-import pytest
 
 from tcd_jepa.modules.dynamic_predictor import DynamicPredictor, ModuleRouter
-from tcd_jepa.modules.module_registry import ModuleRegistry
 from tcd_jepa.modules.module_factory import (
     AttractorModule,
     BoundaryModule,
     CycleModule,
     ModuleFactory,
 )
+from tcd_jepa.modules.module_registry import ModuleRegistry
 from tcd_jepa.topology.feature_extraction import TopologicalFeature
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

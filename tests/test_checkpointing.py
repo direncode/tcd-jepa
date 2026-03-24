@@ -4,11 +4,10 @@ import tempfile
 from pathlib import Path
 
 import torch
-import pytest
 
 from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
 from tcd_jepa.training.trainer import build_optimizer
-from tcd_jepa.utils.checkpointing import save_checkpoint, load_checkpoint
+from tcd_jepa.utils.checkpointing import load_checkpoint, save_checkpoint
 
 
 def _build_small_model(use_dynamic_predictor: bool = False):

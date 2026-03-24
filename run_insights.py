@@ -29,8 +29,6 @@ import logging
 import sys
 from pathlib import Path
 
-import torch
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",

@@ -13,17 +13,16 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from tcd_jepa.utils.config import load_config_with_overrides
-from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
-from tcd_jepa.models.target_encoder import momentum_schedule
-from tcd_jepa.training.trainer import Trainer, build_optimizer
-from tcd_jepa.training.schedulers import WarmupCosineSchedule, CosineWDSchedule
+from experiments.two_rooms.environment import TwoRoomsDataset
 from tcd_jepa.core.recursive_loop import RecursiveLoop
 from tcd_jepa.core.system1_encoder import StreamEncoder
+from tcd_jepa.models.target_encoder import momentum_schedule
+from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
+from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
+from tcd_jepa.training.trainer import build_optimizer
+from tcd_jepa.utils.config import load_config_with_overrides
 from tcd_jepa.utils.masking import MaskCollator
-from tcd_jepa.utils.logging import MetricLogger
 from tcd_jepa.utils.visualization import plot_loss_curves, plot_module_formation
-from experiments.two_rooms.environment import TwoRoomsDataset
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("two_rooms")

@@ -24,14 +24,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
-from tcd_jepa.models.target_encoder import momentum_schedule
-from tcd_jepa.training.trainer import Trainer, build_optimizer
-from tcd_jepa.training.schedulers import WarmupCosineSchedule, CosineWDSchedule
+from experiments.two_rooms.environment import TwoRoomsDataset, TwoRoomsEnv
 from tcd_jepa.core.recursive_loop import RecursiveLoop
 from tcd_jepa.core.system1_encoder import StreamEncoder
+from tcd_jepa.models.target_encoder import momentum_schedule
+from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
+from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
+from tcd_jepa.training.trainer import Trainer, build_optimizer
 from tcd_jepa.utils.masking import MaskCollator
-from experiments.two_rooms.environment import TwoRoomsDataset, TwoRoomsEnv
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger("benchmark")
@@ -395,7 +395,7 @@ def print_full_report(results, epochs, embed_dim, depth):
     p("=" * 80)
     p("TCD-JEPA vs HYPERSCALER BENCHMARK COMPARISON")
     p(f"Dataset: Two Rooms (64x64) | Model: ViT embed_dim={embed_dim}, depth={depth}")
-    p(f"Protocol: Frozen encoder → Linear probe / k-NN (same as I-JEPA, DINO, etc.)")
+    p("Protocol: Frozen encoder → Linear probe / k-NN (same as I-JEPA, DINO, etc.)")
     p("=" * 80)
 
     for method in ["vanilla", "tcd"]:

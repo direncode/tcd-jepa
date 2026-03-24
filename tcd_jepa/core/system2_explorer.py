@@ -7,7 +7,6 @@ recording over JEPA's latent energy surface.
 from typing import Optional
 
 import torch
-import torch.nn as nn
 
 from tcd_jepa.exploration.blank_space_detector import BlankSpaceDetector
 from tcd_jepa.exploration.fisher_metric import FisherMetric

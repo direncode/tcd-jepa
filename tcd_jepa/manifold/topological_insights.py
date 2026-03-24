@@ -8,12 +8,11 @@ Generates insights that are impossible with standard NLP:
 """
 
 import logging
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
 
-from tcd_jepa.manifold.insight_engine import Insight, EvidenceItem
+from tcd_jepa.manifold.insight_engine import Insight
 from tcd_jepa.manifold.lineage import make_lineage_id
 
 logger = logging.getLogger("tcd_jepa.topological_insights")
@@ -44,7 +43,6 @@ class TopologicalInsightGenerator:
     def _knowledge_gap_insights(self, profile, chunks, features, labels) -> list[Insight]:
         """H2 voids → knowledge gaps between topic clusters."""
         insights = []
-        N = len(chunks)
         num_clusters = int(labels.max().item()) + 1 if len(labels) > 0 else 0
 
         # H2 features (boundaries/voids) indicate missing knowledge

@@ -9,10 +9,8 @@ For a deterministic predictor with Gaussian noise model:
 F_ij(z) = (1/sigma^2) * sum_k (dp_k/dz_i)(dp_k/dz_j)
 """
 
-from typing import Optional
 
 import torch
-import torch.nn as nn
 
 
 class FisherMetric:
@@ -56,7 +54,7 @@ class FisherMetric:
 
         with torch.no_grad():
             p_z = predictor_fn(z)  # [B, D_out]
-            D_out = p_z.shape[-1]
+            _ = p_z.shape[-1]
 
         jacobian_cols = []
         with torch.no_grad():
@@ -110,7 +108,6 @@ class FisherMetric:
         J = self.compute_jacobian_fd(z_mid, predictor_fn)  # [B, D_out, K]
 
         # Project difference onto Jacobian directions
-        diff = (z2 - z1)  # [B, D]
         # Since J is in sampled directions, project diff onto those directions
         fisher = torch.bmm(J.transpose(1, 2), J) / self.noise_variance  # [B, K, K]
 

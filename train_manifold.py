@@ -27,16 +27,19 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from tcd_jepa.utils.config import load_config_with_overrides
-from tcd_jepa.manifold.model import build_manifold_jepa
-from tcd_jepa.manifold.dataset import CausalManifoldDataset, SyntheticManifoldDataset, LatentOceanDataset
-from tcd_jepa.manifold.masking import ManifoldMaskCollator
-from tcd_jepa.manifold.trainer import ManifoldTrainer
-from tcd_jepa.manifold.evaluation import run_full_manifold_evaluation
-from tcd_jepa.models.target_encoder import momentum_schedule
-from tcd_jepa.training.trainer import build_optimizer
-from tcd_jepa.training.schedulers import WarmupCosineSchedule, CosineWDSchedule
 from tcd_jepa.core.recursive_loop import RecursiveLoop
+from tcd_jepa.manifold.dataset import (
+    LatentOceanDataset,
+    SyntheticManifoldDataset,
+)
+from tcd_jepa.manifold.evaluation import run_full_manifold_evaluation
+from tcd_jepa.manifold.masking import ManifoldMaskCollator
+from tcd_jepa.manifold.model import build_manifold_jepa
+from tcd_jepa.manifold.trainer import ManifoldTrainer
+from tcd_jepa.models.target_encoder import momentum_schedule
+from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
+from tcd_jepa.training.trainer import build_optimizer
+from tcd_jepa.utils.config import load_config_with_overrides
 
 logging.basicConfig(
     level=logging.INFO,

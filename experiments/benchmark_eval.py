@@ -9,7 +9,6 @@ Usage:
 """
 
 import argparse
-import copy
 import json
 import logging
 import time
@@ -23,14 +22,13 @@ import torchvision
 import torchvision.transforms as T
 from torch.utils.data import DataLoader, Subset
 
-from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
-from tcd_jepa.models.target_encoder import momentum_schedule
-from tcd_jepa.training.trainer import Trainer, build_optimizer
-from tcd_jepa.training.schedulers import WarmupCosineSchedule, CosineWDSchedule
 from tcd_jepa.core.recursive_loop import RecursiveLoop
 from tcd_jepa.core.system1_encoder import StreamEncoder
+from tcd_jepa.models.target_encoder import momentum_schedule
+from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
+from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
+from tcd_jepa.training.trainer import Trainer, build_optimizer
 from tcd_jepa.utils.masking import MaskCollator
-from tcd_jepa.utils.logging import MetricLogger
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger("benchmark")
@@ -213,7 +211,7 @@ class SSLDatasetWrapper(torch.utils.data.Dataset):
 def try_load_cifar10(data_dir="./data"):
     """Try to load CIFAR-10, return None if not available."""
     try:
-        ds = torchvision.datasets.CIFAR10(root=data_dir, train=True, download=False)
+        torchvision.datasets.CIFAR10(root=data_dir, train=True, download=False)
         return True
     except Exception:
         return False
@@ -606,7 +604,7 @@ def print_results_table(results):
         v_knn = np.mean([r["knn_k20"] for r in results["vanilla"]])
         t_knn = np.mean([r["knn_k20"] for r in results["tcd"]])
 
-        print(f"\nIMPROVEMENT (TCD over Vanilla):")
+        print("\nIMPROVEMENT (TCD over Vanilla):")
         print(f"  Linear Probe:  {t_lin - v_lin:+.2f}% ({(t_lin-v_lin)/max(v_lin,1e-6)*100:+.1f}% relative)")
         print(f"  k-NN (k=20):   {t_knn - v_knn:+.2f}% ({(t_knn-v_knn)/max(v_knn,1e-6)*100:+.1f}% relative)")
 

@@ -1,9 +1,8 @@
 """Tests for Phase 4 — Recursive Loop."""
 
 import torch
-import pytest
 
-from tcd_jepa.core.recursive_loop import RecursiveLoop, ConvergenceMonitor
+from tcd_jepa.core.recursive_loop import ConvergenceMonitor, RecursiveLoop
 
 
 def _quadratic_energy(z: torch.Tensor) -> torch.Tensor:
@@ -23,7 +22,7 @@ class TestConvergenceMonitor:
 
         # Simulate stable iterations
         for i in range(10):
-            result = monitor.update(
+            monitor.update(
                 num_modules=5,
                 representations=torch.randn(10, 8),
                 energy_landscape_smoothness=1.0,
