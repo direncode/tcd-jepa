@@ -657,6 +657,8 @@ def main():
                         help="Quick test (5 epochs, 1 seed)")
     parser.add_argument("--no-wandb", action="store_true",
                         help="Disable wandb logging")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from latest checkpoint and skip completed seeds")
     parser.add_argument("--data-dir", type=str, default=None,
                         help="Override data directory")
     args = parser.parse_args()
