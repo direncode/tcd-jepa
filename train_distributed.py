@@ -13,6 +13,8 @@ For full error tracebacks on crash:
 
 import argparse
 import logging
+import subprocess
+import sys
 import os
 import time
 from pathlib import Path
@@ -455,6 +457,8 @@ def main():
     parser.add_argument("--tcd", action="store_true", help="Enable TCD recursive loop")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile")
     parser.add_argument("--probe", action="store_true", help="Run linear probe after training")
+    parser.add_argument("--eval", action="store_true", help="Run full benchmark eval after training")
+    parser.add_argument("--eval-epochs", type=int, default=30, help="Pretraining epochs for benchmark eval")
     parser.add_argument("overrides", nargs="*", help="Config overrides")
     args = parser.parse_args()
 
@@ -650,10 +654,26 @@ def main():
         if metric_logger is not None and acc is not None:
             metric_logger.log({"linear_probe_acc": acc}, step=num_epochs)
 
+    # -- Full benchmark eval (rank 0 only, after DDP cleanup) --
+    run_full_eval = args.eval and is_main_process()
+    eval_epochs = args.eval_epochs
+
     if metric_logger is not None:
         metric_logger.close()
 
     cleanup_distributed()
+
+    if run_full_eval:
+        logger.info("Running full benchmark evaluation (experiments/benchmark_eval.py)...")
+        result = subprocess.run(
+            [sys.executable, "-m", "experiments.benchmark_eval",
+             "--epochs", str(eval_epochs), "--seeds", "2"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+        )
+        if result.returncode != 0:
+            logger.error(f"Benchmark eval exited with code {result.returncode}")
+        else:
+            logger.info("Benchmark evaluation complete. Results in results/benchmark/")
 
 
 if __name__ == "__main__":
