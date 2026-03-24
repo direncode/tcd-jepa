@@ -122,9 +122,8 @@ class DynamicPredictor(nn.Module):
         B, N, D = base_pred.shape
         z_flat = base_pred.reshape(B * N, D)
 
-        # Compute per-module routing weights
-        z_mean = z_flat.mean(dim=0, keepdim=True).expand(B * N, -1)
-        routing_weights = self.module_router(z_mean, len(modules))  # [B*N, M]
+        # Compute per-token routing weights (each token gets distinct routing)
+        routing_weights = self.module_router(z_flat, len(modules))  # [B*N, M]
 
         # Compute weighted module contributions
         module_outputs = []

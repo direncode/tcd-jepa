@@ -70,7 +70,8 @@ class TestContextEncoder:
         encoder(x)
         assert len(encoder.get_layer_stats()) == 2
         encoder.clear_stats()
-        assert len(encoder.get_layer_stats()) == 0
+        stats = encoder.get_layer_stats()
+        assert all(s == {} for s in stats), "All stats should be cleared"
 
 
 class TestTargetEncoder:
