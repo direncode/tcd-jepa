@@ -14,30 +14,25 @@ Usage:
 
 import logging
 import time
-from functools import partial
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from tcd_jepa.core.recursive_loop import RecursiveLoop
 from tcd_jepa.manifold.document_processor import DocumentProcessor, ProcessedCorpus
+from tcd_jepa.manifold.evaluation import (
+    compute_latent_ocean_kpis,
+    extract_manifold_features,
+)
 from tcd_jepa.manifold.insight_engine import InsightEngine, InsightReport
 from tcd_jepa.manifold.masking import ManifoldMaskCollator
-from tcd_jepa.manifold.model import build_manifold_jepa, ManifoldJEPAModel
-from tcd_jepa.manifold.evaluation import (
-    extract_manifold_features,
-    compute_latent_ocean_kpis,
-    linear_probe,
-    knn_evaluate,
-    compute_representation_metrics,
-)
+from tcd_jepa.manifold.model import ManifoldJEPAModel, build_manifold_jepa
 from tcd_jepa.models.target_encoder import momentum_schedule
+from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
 from tcd_jepa.training.trainer import build_optimizer
-from tcd_jepa.training.schedulers import WarmupCosineSchedule, CosineWDSchedule
-from tcd_jepa.core.recursive_loop import RecursiveLoop
 
 logger = logging.getLogger("tcd_jepa.nl_pipeline")
 

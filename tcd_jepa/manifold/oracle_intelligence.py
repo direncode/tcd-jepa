@@ -42,7 +42,7 @@ Usage:
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Optional, Callable
+from typing import Callable, Optional
 
 logger = logging.getLogger("tcd_jepa.oracle_intelligence")
 
@@ -229,10 +229,10 @@ def _universal_translate(insight, lens: LensDefinition, ctx: OracleContext) -> O
     """
     cat = insight.category
     sev = insight.severity
-    ent = lens.entity_frame or ctx.entity_type
-    actor = ctx.actor
-    resource = ctx.resource_noun
-    urgency = SEVERITY_URGENCY.get(sev, SEVERITY_URGENCY["medium"])
+    _ent = lens.entity_frame or ctx.entity_type
+    _actor = ctx.actor
+    _resource = ctx.resource_noun
+    _urgency = SEVERITY_URGENCY.get(sev, SEVERITY_URGENCY["medium"])
 
     # ── Strategy 1: Custom translation override ──
     if cat in lens.custom_translations:
@@ -433,8 +433,8 @@ def _translate_intervention(insight, lens, ctx):
     return {
         "headline": f"FRAGILITY: removing {count or 'key'} items fragments the system",
         "body": (
-            f"  These items hold the structure together.\n"
-            f"  \u2192 ACTION: Treat as critical infrastructure. Protect and reinforce."
+            "  These items hold the structure together.\n"
+            "  \u2192 ACTION: Treat as critical infrastructure. Protect and reinforce."
         ),
     }
 
@@ -479,14 +479,14 @@ def _translate_stability(insight, lens, ctx):
     is_fragile = "fragile" in insight.title.lower()
     if is_fragile:
         return {
-            "headline": f"FRAGILE POSITION: structurally vulnerable",
+            "headline": "FRAGILE POSITION: structurally vulnerable",
             "body": (
                 f"  This structure could collapse with minor changes.\n"
                 f"  \u2192 ACTION: Do not over-invest until {lens.risk_frame} is stabilized."
             ),
         }
     return {
-        "headline": f"DEFENSIBLE POSITION: structurally robust",
+        "headline": "DEFENSIBLE POSITION: structurally robust",
         "body": (
             f"  Hard to dislodge. Natural moat.\n"
             f"  \u2192 ACTION: Invest to strengthen this position for lasting {lens.positive_outcome}."

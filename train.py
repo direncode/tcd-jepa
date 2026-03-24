@@ -18,15 +18,15 @@ import torchvision
 import torchvision.transforms as T
 from torch.utils.data import DataLoader
 
-from tcd_jepa.utils.config import load_config_with_overrides
-from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
-from tcd_jepa.models.target_encoder import momentum_schedule
-from tcd_jepa.training.trainer import Trainer, build_optimizer
-from tcd_jepa.training.schedulers import WarmupCosineSchedule, CosineWDSchedule
 from tcd_jepa.core.recursive_loop import RecursiveLoop
 from tcd_jepa.core.system1_encoder import StreamEncoder
-from tcd_jepa.utils.masking import MaskCollator
+from tcd_jepa.models.target_encoder import momentum_schedule
+from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
+from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
+from tcd_jepa.training.trainer import Trainer, build_optimizer
+from tcd_jepa.utils.config import load_config_with_overrides
 from tcd_jepa.utils.logging import MetricLogger
+from tcd_jepa.utils.masking import MaskCollator
 
 logging.basicConfig(
     level=logging.INFO,

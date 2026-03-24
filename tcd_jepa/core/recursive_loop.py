@@ -14,9 +14,9 @@ Convergence:
 """
 
 from typing import Optional
-from collections import deque
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -37,9 +37,11 @@ class ConvergenceMonitor:
         epsilon: float = 0.01,
         patience: int = 5,
         history_size: int = 50,
+        distributed: bool = False,
     ) -> None:
         self.epsilon = epsilon
         self.patience = patience
+        self.distributed = distributed
         self._history: list[dict] = []
         self._convergence_scores: list[float] = []
         self._consecutive_converged = 0
@@ -78,6 +80,12 @@ class ConvergenceMonitor:
 
         # Combined convergence score
         convergence_score = module_change + repr_divergence + smoothness_change
+
+        # Synchronize across ranks: use mean convergence score
+        if self.distributed and dist.is_initialized():
+            score_tensor = torch.tensor([convergence_score], dtype=torch.float64)
+            dist.all_reduce(score_tensor, op=dist.ReduceOp.AVG)
+            convergence_score = float(score_tensor.item())
 
         # Track consecutive convergence
         if convergence_score < self.epsilon:

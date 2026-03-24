@@ -1,13 +1,12 @@
 """Tests for System 2 — Energy Explorer."""
 
 import torch
-import pytest
 
+from tcd_jepa.core.system2_explorer import EnergyExplorer
 from tcd_jepa.exploration.blank_space_detector import BlankSpaceDetector
+from tcd_jepa.exploration.fisher_metric import FisherMetric
 from tcd_jepa.exploration.langevin import LangevinSampler
 from tcd_jepa.exploration.trajectory_tracker import TrajectoryTracker
-from tcd_jepa.exploration.fisher_metric import FisherMetric
-from tcd_jepa.core.system2_explorer import EnergyExplorer
 
 
 def _quadratic_energy(z: torch.Tensor) -> torch.Tensor:

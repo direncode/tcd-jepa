@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Optional
 
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -54,6 +53,8 @@ class Trainer:
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.scaler = scaler
+        self.use_amp = scaler is not None
+        self.grad_clip_norm = cfg.get("training", {}).get("grad_clip_norm", 1.0)
         self.recursive_loop = recursive_loop
         self.stream_encoder = stream_encoder
         self.global_step = 0
@@ -166,18 +167,22 @@ class Trainer:
         masks_enc = [m.to(self.device) for m in masks_enc]
         masks_pred = [m.to(self.device) for m in masks_pred]
 
-        # Forward pass
-        result = self.model(images, masks_enc, masks_pred)
-        loss = result["loss"]
+        # Forward pass with optional mixed-precision autocast
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=self.use_amp):
+            result = self.model(images, masks_enc, masks_pred)
+            loss = result["loss"]
 
-        # Backward pass
+        # Backward pass with gradient clipping
         self.optimizer.zero_grad()
         if self.scaler is not None:
             self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
             self.optimizer.step()
 
         # Update schedules

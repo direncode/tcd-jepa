@@ -17,12 +17,12 @@ import torch
 def _get_backend():
     """Detect available persistent homology backend."""
     try:
-        from gtda.homology import VietorisRipsPersistence
+        from gtda.homology import VietorisRipsPersistence  # noqa: F401
         return "giotto"
     except ImportError:
         pass
     try:
-        from ripser import ripser
+        from ripser import ripser  # noqa: F401
         return "ripser"
     except ImportError:
         pass
@@ -131,8 +131,8 @@ class PersistentHomologyComputer:
 
         Computes H_0 via single-linkage clustering (connected components).
         """
-        from scipy.spatial.distance import pdist, squareform
         from scipy.cluster.hierarchy import linkage
+        from scipy.spatial.distance import pdist
 
         dists = pdist(points)
         Z = linkage(dists, method="single")

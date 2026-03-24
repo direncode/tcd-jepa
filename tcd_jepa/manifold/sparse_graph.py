@@ -5,8 +5,8 @@ memory instead of O(N²).  Provides a ``to_dense(indices)`` bridge so existing
 training code that indexes ``adjacency[i, j]`` still works on small subsets.
 """
 
-from dataclasses import dataclass, field
 from collections import deque
+from dataclasses import dataclass, field
 from typing import Iterator, Optional
 
 import torch

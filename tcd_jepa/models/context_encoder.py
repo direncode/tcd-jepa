@@ -23,8 +23,11 @@ class ContextEncoder(nn.Module):
     def __init__(self, encoder: VisionTransformer):
         super().__init__()
         self.encoder = encoder
-        # Statistics collected during forward pass
-        self._layer_stats: list[dict[str, torch.Tensor]] = []
+        # Pre-allocate fixed-length stats list — one slot per block.
+        # Hooks only do atomic assignment to a pre-existing index,
+        # avoiding append/resize races under DDP or concurrent forwards.
+        num_blocks = len(encoder.blocks)
+        self._layer_stats: list[dict[str, float]] = [{} for _ in range(num_blocks)]
         self._hooks: list[torch.utils.hooks.RemovableHook] = []
         self._register_hooks()
 
@@ -51,15 +54,12 @@ class ContextEncoder(nn.Module):
         def hook_fn(module: nn.Module, input: tuple, output: torch.Tensor) -> None:
             with torch.no_grad():
                 if isinstance(output, torch.Tensor):
-                    stats = {
+                    # Atomic assignment to pre-allocated slot — no append/resize.
+                    self._layer_stats[layer_idx] = {
                         "mean": output.mean().item(),
                         "std": output.std().item(),
                         "norm": output.norm(dim=-1).mean().item(),
                     }
-                    # Pad stats list if needed
-                    while len(self._layer_stats) <= layer_idx:
-                        self._layer_stats.append({})
-                    self._layer_stats[layer_idx] = stats
         return hook_fn
 
     def get_layer_stats(self) -> list[dict[str, float]]:
@@ -68,7 +68,8 @@ class ContextEncoder(nn.Module):
 
     def clear_stats(self) -> None:
         """Clear collected statistics."""
-        self._layer_stats.clear()
+        for i in range(len(self._layer_stats)):
+            self._layer_stats[i] = {}
 
     def forward(
         self, x: torch.Tensor, masks: Optional[list[torch.Tensor]] = None
@@ -82,7 +83,7 @@ class ContextEncoder(nn.Module):
         Returns:
             Encoded patch representations.
         """
-        self._layer_stats.clear()
+        self.clear_stats()
         return self.encoder(x, masks=masks)
 
     def parameters(self, recurse: bool = True):

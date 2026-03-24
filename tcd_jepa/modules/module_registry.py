@@ -3,11 +3,9 @@
 Manages lifecycle: creation, performance tracking, pruning.
 """
 
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
-import torch
 import torch.nn as nn
 
 from tcd_jepa.topology.feature_extraction import TopologicalFeature

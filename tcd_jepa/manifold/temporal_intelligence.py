@@ -7,7 +7,6 @@ Uses convergence history and representation dynamics to detect:
 """
 
 import logging
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -150,12 +149,11 @@ class TemporalIntelligenceEngine:
                 drop_epoch = i
 
         max_spike = 0
-        spike_epoch = -1
         for i in range(1, len(scores)):
             spike = scores[i] - scores[i - 1]
             if spike > max_spike:
                 max_spike = spike
-                spike_epoch = i
+                _spike_epoch = i
 
         # Report phase transitions (sudden drops = crystallization events)
         if max_drop > 0.05 and drop_epoch > 0:

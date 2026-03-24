@@ -17,10 +17,8 @@ Usage:
 """
 
 import argparse
-import glob
 import logging
 import os
-import re
 import time
 import traceback
 from pathlib import Path
@@ -39,9 +37,8 @@ from torch.utils.data.distributed import DistributedSampler
 from tcd_jepa.core.recursive_loop import RecursiveLoop
 from tcd_jepa.core.system1_encoder import StreamEncoder
 from tcd_jepa.exploration.langevin import LangevinSampler
-from tcd_jepa.models.tcd_jepa_model import TCDJEPAModel, build_tcd_jepa
 from tcd_jepa.models.target_encoder import momentum_schedule
-from tcd_jepa.training.losses import jepa_loss
+from tcd_jepa.models.tcd_jepa_model import TCDJEPAModel, build_tcd_jepa
 from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
 from tcd_jepa.training.trainer import build_optimizer
 from tcd_jepa.utils.checkpointing import load_checkpoint, save_checkpoint
@@ -64,9 +61,11 @@ def wrap_fsdp(model: TCDJEPAModel, device_id: int) -> nn.Module:
     """
     from torch.distributed.fsdp import (
         BackwardPrefetch,
-        FullyShardedDataParallel as FSDP,
         MixedPrecision,
         ShardingStrategy,
+    )
+    from torch.distributed.fsdp import (
+        FullyShardedDataParallel as FSDP,
     )
     from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
@@ -171,15 +170,32 @@ class FaultTolerantTrainer:
     ) -> None:
         """Auto-save checkpoint on exception before re-raising."""
         rank = dist.get_rank() if dist.is_initialized() else 0
-        if rank != 0:
-            return
         try:
-            path = str(self.ft_checkpoint_dir / f"emergency_{epoch:04d}_step{step:06d}.pt")
             if strategy == "fsdp":
-                # For FSDP, we can only save if the model is accessible
-                logger.warning("Emergency save with FSDP may be incomplete")
+                # FSDP emergency: each rank saves its own local shard (no collective comms).
+                from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+                from torch.distributed.fsdp import StateDictType
+
+                shard_path = str(
+                    self.ft_checkpoint_dir
+                    / f"emergency_{epoch:04d}_step{step:06d}_rank{rank}.pt"
+                )
+                with FSDP.state_dict_type(model, StateDictType.LOCAL_STATE_DICT):
+                    checkpoint = {
+                        "epoch": epoch,
+                        "model": model.state_dict(),
+                        "optimizer": optimizer.state_dict(),
+                    }
+                    if scaler is not None:
+                        checkpoint["scaler"] = scaler.state_dict()
+                    torch.save(checkpoint, shard_path)
+                logger.info(f"Emergency FSDP shard saved to {shard_path}")
+                return
             else:
-                # DDP: unwrap and save
+                # DDP: unwrap and save (rank 0 only)
+                if rank != 0:
+                    return
+                path = str(self.ft_checkpoint_dir / f"emergency_{epoch:04d}_step{step:06d}.pt")
                 raw = model.module if hasattr(model, "module") else model
                 save_checkpoint(
                     path=path,
@@ -269,6 +285,10 @@ class DistributedTrainer:
         self.global_step = 0
         self._known_module_ids: set[str] = set()
         self.rank = dist.get_rank() if dist.is_initialized() else 0
+        train_cfg = cfg.get("training", {})
+        self.grad_clip_norm = train_cfg.get("grad_clip_norm", 1.0)
+        # AMP autocast only for DDP — FSDP handles its own mixed precision
+        self.use_amp = scaler is not None and strategy != "fsdp"
 
     def train(self, num_epochs: int, start_epoch: int = 0) -> None:
         """Run the distributed training loop."""
@@ -318,6 +338,8 @@ class DistributedTrainer:
                     n_mods = loop_result["crystallization"]["num_active_modules"]
                     if self.rank == 0:
                         logger.info(f"  Recursive loop: {n_mods} active modules")
+                    # Broadcast new module parameters from rank 0 to all ranks
+                    self._sync_crystallized_modules()
                     self._register_new_module_params()
 
             # Logging (rank 0 only)
@@ -377,30 +399,44 @@ class DistributedTrainer:
 
         tcd_loss_val = 0.0
 
-        if use_tcd:
-            # TCD-aware forward pass
-            result = self.raw_model.forward_with_tcd(
-                images, masks_enc, masks_pred,
-                langevin_sampler=self.langevin_sampler,
-                stream_encoder=self.stream_encoder,
-                diff_steps=diff_steps,
-                tcd_weight=tcd_weight,
-            )
-            loss = result["loss"]
-            tcd_loss_val = result["tcd_loss"].item()
-        else:
-            # Standard JEPA forward
-            result = self.model(images, masks_enc, masks_pred)
-            loss = result["loss"]
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=self.use_amp):
+            if use_tcd:
+                # TCD-aware forward: route standard JEPA through DDP wrapper for
+                # gradient sync, compute TCD auxiliary loss via raw model separately.
+                result = self.model(images, masks_enc, masks_pred)
+                jepa_loss = result["loss"]
 
-        # Backward pass
+                # TCD auxiliary loss (raw model, detached exploration)
+                tcd_result = self.raw_model.forward_with_tcd(
+                    images, masks_enc, masks_pred,
+                    langevin_sampler=self.langevin_sampler,
+                    stream_encoder=self.stream_encoder,
+                    diff_steps=diff_steps,
+                    tcd_weight=tcd_weight,
+                )
+                tcd_loss = tcd_result["tcd_loss"]
+                tcd_loss_val = tcd_loss.item()
+                loss = jepa_loss + tcd_weight * tcd_loss
+            else:
+                # Standard JEPA forward through DDP/FSDP wrapper
+                result = self.model(images, masks_enc, masks_pred)
+                loss = result["loss"]
+
+        # Backward pass with gradient clipping
         self.optimizer.zero_grad()
         if self.scaler is not None:
             self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), self.grad_clip_norm
+            )
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), self.grad_clip_norm
+            )
             self.optimizer.step()
 
         # Update schedules
@@ -430,6 +466,19 @@ class DistributedTrainer:
                 optimizer=self.optimizer,
                 scaler=self.scaler,
             )
+
+    def _sync_crystallized_modules(self) -> None:
+        """Broadcast crystallized module parameters from rank 0 to all ranks.
+
+        Ensures all DDP replicas have identical module parameters after
+        crystallization, which only runs on local data per rank.
+        """
+        if not dist.is_initialized() or self.recursive_loop is None:
+            return
+        registry = self.recursive_loop.crystallizer.registry
+        for _, module in registry.get_all_modules():
+            for param in module.parameters():
+                dist.broadcast(param.data, src=0)
 
     def _register_new_module_params(self) -> None:
         """Add newly crystallized module parameters to the optimizer."""
@@ -577,13 +626,22 @@ def main() -> None:
     if train_cfg.get("strategy"):
         strategy = train_cfg["strategy"] if args.strategy == "ddp" else args.strategy
     activation_ckpt = args.activation_checkpointing or train_cfg.get("activation_checkpointing", False)
-    max_retries = args.max_retries if args.max_retries != 3 else train_cfg.get("max_retries", 3)
+    _ = args.max_retries if args.max_retries != 3 else train_cfg.get("max_retries", 3)
     barrier_freq = train_cfg.get("monitored_barrier_freq", 100)
 
     # Seed (per-rank for different data augmentation)
     seed = train_cfg.get("seed", 42)
     torch.manual_seed(seed + rank)
     np.random.seed(seed + rank)
+
+    # Optional CUDA determinism (hurts perf but ensures reproducibility)
+    if train_cfg.get("deterministic", False):
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        if rank == 0:
+            logger.info("CUDA deterministic mode enabled")
+    else:
+        torch.backends.cudnn.benchmark = True
 
     if rank == 0:
         logger.info(f"World size: {world_size}, Strategy: {strategy}")
@@ -706,10 +764,13 @@ def main() -> None:
         stream_encoder = StreamEncoder(raw_model.context_encoder, raw_model.target_encoder)
         raw_model.set_module_registry(recursive_loop.crystallizer.registry)
 
+        langevin_gen = torch.Generator(device=device)
+        langevin_gen.manual_seed(seed + rank + 1000)
         langevin_sampler = LangevinSampler(
             step_size=0.01,
             temperature=1.0,
             max_steps=train_cfg.get("langevin_diff_steps", 5),
+            generator=langevin_gen,
         )
         if rank == 0:
             logger.info("TCD recursive loop enabled with differentiable Langevin")

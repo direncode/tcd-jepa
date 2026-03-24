@@ -52,3 +52,14 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",  # line too long — handled by formatter
+    "E741",  # ambiguous variable names (common in math-heavy code)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tcd_jepa", "experiments"]

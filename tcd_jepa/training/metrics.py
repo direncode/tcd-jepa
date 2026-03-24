@@ -1,6 +1,6 @@
 """Training metrics for TCD-JEPA."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass

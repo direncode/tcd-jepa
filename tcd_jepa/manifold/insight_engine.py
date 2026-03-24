@@ -22,7 +22,10 @@ import torch
 import torch.nn.functional as F
 
 from tcd_jepa.manifold.lineage import (
-    InsightNode, ClusterNode, LineageGraph, make_lineage_id,
+    ClusterNode,
+    InsightNode,
+    LineageGraph,
+    make_lineage_id,
 )
 
 logger = logging.getLogger("tcd_jepa.insight_engine")
@@ -151,7 +154,8 @@ class InsightReport:
         # Oracle mode: delegate to OracleIntelligenceEngine
         if mode != "technical":
             from tcd_jepa.manifold.oracle_intelligence import (
-                OracleIntelligenceEngine, OracleContext,
+                OracleContext,
+                OracleIntelligenceEngine,
             )
             ctx = self.oracle_context if self.oracle_context else OracleContext()
             engine = OracleIntelligenceEngine()
@@ -189,20 +193,20 @@ class InsightReport:
             benchmark = 70
             direction = "ABOVE" if cs >= benchmark else "BELOW"
             lines.append(f"  Clarity Score: {cs:.1f}/100 ({clarity_desc}) — {direction} the {benchmark} enterprise benchmark")
-            lines.append(f"    → How well-separated are the topic clusters in this corpus")
+            lines.append("    → How well-separated are the topic clusters in this corpus")
         if "drift_velocity" in self.kpis:
             dv = self.kpis["drift_velocity"]
             drift_desc = "highly dynamic" if dv > 0.8 else "active" if dv > 0.4 else "stable" if dv > 0.1 else "static"
             lines.append(f"  Drift Velocity: {dv:.3f} ({drift_desc})")
-            lines.append(f"    → Rate of semantic evolution across the corpus")
+            lines.append("    → Rate of semantic evolution across the corpus")
         if "opportunity_surface" in self.kpis:
             os_val = self.kpis["opportunity_surface"]
             lines.append(f"  Opportunity Surface: {os_val}")
-            lines.append(f"    → Cross-topic high-similarity connections (potential synergies)")
+            lines.append("    → Cross-topic high-similarity connections (potential synergies)")
         if "risk_horizon" in self.kpis:
             rh = self.kpis["risk_horizon"]
             lines.append(f"  Risk Horizon: {rh}")
-            lines.append(f"    → Chunks at topic boundaries (ambiguous classification)")
+            lines.append("    → Chunks at topic boundaries (ambiguous classification)")
         lines.append("")
 
         # TCD topology
@@ -372,11 +376,11 @@ class InsightEngine:
 
         # Deep signal intelligence engines
         if deep_signal_profile is not None:
-            from tcd_jepa.manifold.topological_insights import TopologicalInsightGenerator
             from tcd_jepa.manifold.causal_intelligence import CausalIntelligenceEngine
-            from tcd_jepa.manifold.uncertainty_intelligence import UncertaintyIntelligenceEngine
-            from tcd_jepa.manifold.temporal_intelligence import TemporalIntelligenceEngine
             from tcd_jepa.manifold.meta_intelligence import MetaIntelligenceEngine
+            from tcd_jepa.manifold.temporal_intelligence import TemporalIntelligenceEngine
+            from tcd_jepa.manifold.topological_insights import TopologicalInsightGenerator
+            from tcd_jepa.manifold.uncertainty_intelligence import UncertaintyIntelligenceEngine
 
             logger.info("Running deep signal intelligence engines...")
 
@@ -1139,7 +1143,7 @@ class InsightEngine:
         keep_mask = torch.ones(N, dtype=torch.bool)
         keep_mask[anomaly_idx] = False
 
-        kept_features = features[keep_mask]
+        _ = features[keep_mask]
         kept_labels = labels[keep_mask]
 
         for ins in insights:

@@ -8,13 +8,10 @@ Goes beyond correlation using attention flows and information geometry:
 """
 
 import logging
-from typing import Optional
-from collections import defaultdict
 
 import torch
-import torch.nn.functional as F
 
-from tcd_jepa.manifold.insight_engine import Insight, EvidenceItem
+from tcd_jepa.manifold.insight_engine import Insight
 from tcd_jepa.manifold.lineage import make_lineage_id
 
 logger = logging.getLogger("tcd_jepa.causal_intelligence")

@@ -8,7 +8,6 @@ Temperature beta is biased toward blank space regions (lower beta = more explora
 from typing import Optional
 
 import torch
-import torch.nn as nn
 
 
 class LangevinSampler:
@@ -25,12 +24,22 @@ class LangevinSampler:
         min_temperature: float = 0.1,
         max_steps: int = 100,
         grad_clip: float = 1.0,
+        generator: Optional[torch.Generator] = None,
     ) -> None:
         self.step_size = step_size
         self.temperature = temperature
         self.min_temperature = min_temperature
         self.max_steps = max_steps
         self.grad_clip = grad_clip
+        self.generator = generator
+
+    def _randn_like(self, z: torch.Tensor) -> torch.Tensor:
+        """Generate random noise with optional seeded generator for reproducibility."""
+        if self.generator is not None:
+            return torch.randn(
+                z.shape, generator=self.generator, device=z.device, dtype=z.dtype
+            )
+        return torch.randn_like(z)
 
     def _compute_energy_gradient(
         self,
@@ -87,7 +96,7 @@ class LangevinSampler:
         beta = beta.clamp(min=self.min_temperature)
 
         noise_scale = torch.sqrt(2.0 * self.step_size / beta)
-        noise = torch.randn_like(z) * noise_scale
+        noise = self._randn_like(z) * noise_scale
 
         z_new = z - self.step_size * grad + noise
         return z_new.detach()
@@ -168,7 +177,7 @@ class LangevinSampler:
 
         # Reparameterization trick: noise is detached but scale is differentiable
         noise_scale = torch.sqrt(2.0 * self.step_size / beta)
-        noise = torch.randn_like(z).detach() * noise_scale
+        noise = self._randn_like(z).detach() * noise_scale
 
         z_new = z - self.step_size * grad + noise
         return z_new

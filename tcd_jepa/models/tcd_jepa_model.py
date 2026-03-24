@@ -1,7 +1,6 @@
 """Full TCD-JEPA model combining all components."""
 
 from functools import partial
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -11,7 +10,6 @@ from tcd_jepa.models.target_encoder import TargetEncoder
 from tcd_jepa.models.vision_transformer import VisionTransformer
 from tcd_jepa.modules.predictor import VisionTransformerPredictor
 from tcd_jepa.training.losses import jepa_loss, tcd_auxiliary_loss
-from tcd_jepa.utils.tensors import apply_masks
 
 
 class TCDJEPAModel(nn.Module):

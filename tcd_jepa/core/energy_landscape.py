@@ -5,7 +5,6 @@ target representations in latent space. System 2 will explore over this
 surface in later phases.
 """
 
-from typing import Optional
 
 import torch
 import torch.nn.functional as F

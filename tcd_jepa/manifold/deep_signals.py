@@ -19,7 +19,6 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 logger = logging.getLogger("tcd_jepa.deep_signals")
 
@@ -128,8 +127,6 @@ class DeepSignalHarvester:
 
         model.eval()
         detector = BlankSpaceDetector()
-        all_blank_scores = []
-        all_hessian_traces = []
         all_energies = []
 
         num_samples = min(self.blank_detection_samples, len(dataset))
@@ -159,7 +156,7 @@ class DeepSignalHarvester:
 
         # Run blank detection on actual encoder representations
         if all_energies:
-            energies_cat = torch.cat(all_energies)
+            torch.cat(all_energies)
 
             # Collect real encoder outputs for blank detection
             all_z = []
@@ -208,7 +205,6 @@ class DeepSignalHarvester:
             # Aggregate energy to per-chunk
             energy_map = torch.zeros(N)
             chunk_counts = torch.zeros(N)
-            offset = 0
             for i in range(len(all_energies)):
                 e = all_energies[i]
                 sample = dataset[i]
@@ -459,9 +455,9 @@ class DeepSignalHarvester:
     ) -> None:
         """Compute representation quality metrics."""
         from tcd_jepa.manifold.evaluation import (
-            extract_manifold_features,
-            compute_representation_metrics,
             causal_link_prediction,
+            compute_representation_metrics,
+            extract_manifold_features,
             manifold_neighborhood_preservation,
         )
 

@@ -2,15 +2,19 @@
 
 import numpy as np
 import torch
-import pytest
 
-from tcd_jepa.topology.persistent_homology import PersistentHomologyComputer
-from tcd_jepa.topology.persistence_diagrams import PersistenceDiagramAnalyzer
-from tcd_jepa.topology.feature_extraction import TopologicalFeatureExtractor, TopologicalFeature
-from tcd_jepa.modules.module_factory import ModuleFactory, AttractorModule, CycleModule, BoundaryModule
-from tcd_jepa.modules.module_registry import ModuleRegistry
-from tcd_jepa.modules.dynamic_predictor import DynamicPredictor
 from tcd_jepa.core.system3_crystallizer import ModuleCrystallizer
+from tcd_jepa.modules.dynamic_predictor import DynamicPredictor
+from tcd_jepa.modules.module_factory import (
+    AttractorModule,
+    BoundaryModule,
+    CycleModule,
+    ModuleFactory,
+)
+from tcd_jepa.modules.module_registry import ModuleRegistry
+from tcd_jepa.topology.feature_extraction import TopologicalFeature, TopologicalFeatureExtractor
+from tcd_jepa.topology.persistence_diagrams import PersistenceDiagramAnalyzer
+from tcd_jepa.topology.persistent_homology import PersistentHomologyComputer
 
 
 class TestPersistentHomology:

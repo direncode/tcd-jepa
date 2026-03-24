@@ -28,6 +28,14 @@ training:
   use_bfloat16: false
   checkpoint_freq: 10
   seed: 42
+  grad_clip_norm: 1.0
+  deterministic: false
+
+tcd:
+  max_explore: 256
+  margin: 1.0
+  energy_shaping_weight: 0.1
+  monitored_barrier_freq: 100
 
 data:
   dataset: cifar10

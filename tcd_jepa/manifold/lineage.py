@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-
 # ---------------------------------------------------------------------------
 # Lineage ID
 # ---------------------------------------------------------------------------

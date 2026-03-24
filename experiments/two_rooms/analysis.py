@@ -2,9 +2,6 @@
 
 import json
 from pathlib import Path
-from typing import Optional
-
-import numpy as np
 
 
 def load_results(results_dir: str) -> dict:
