@@ -50,13 +50,36 @@ class MetricLogger:
         with open(self.json_path, "a") as f:
             f.write(json.dumps(metrics) + "\n")
 
-        # CSV
+        # CSV (use extrasaction='ignore' to handle varying metric keys gracefully)
         if not self._fields_written:
             self._csv_file = open(self.csv_path, "w", newline="")
-            self._csv_writer = csv.DictWriter(self._csv_file, fieldnames=list(metrics.keys()))
+            self._csv_writer = csv.DictWriter(
+                self._csv_file, fieldnames=list(metrics.keys()), extrasaction="ignore"
+            )
             self._csv_writer.writeheader()
             self._fields_written = True
         if self._csv_writer is not None:
+            # If new fields appear, restart CSV with updated fieldnames
+            current_fields = set(self._csv_writer.fieldnames)
+            new_fields = set(metrics.keys()) - current_fields
+            if new_fields:
+                self._csv_file.close()
+                # Re-read existing data, rewrite with expanded fieldnames
+                all_fields = list(self._csv_writer.fieldnames) + sorted(new_fields)
+                existing_rows = []
+                try:
+                    with open(self.csv_path, "r", newline="") as rf:
+                        reader = csv.DictReader(rf)
+                        existing_rows = list(reader)
+                except Exception:
+                    pass
+                self._csv_file = open(self.csv_path, "w", newline="")
+                self._csv_writer = csv.DictWriter(
+                    self._csv_file, fieldnames=all_fields, extrasaction="ignore"
+                )
+                self._csv_writer.writeheader()
+                for row in existing_rows:
+                    self._csv_writer.writerow(row)
             self._csv_writer.writerow(metrics)
             self._csv_file.flush()
 

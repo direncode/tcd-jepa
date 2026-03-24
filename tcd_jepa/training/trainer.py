@@ -86,9 +86,11 @@ class Trainer:
 
             # Run recursive loop at end of epoch if enabled
             if self.recursive_loop is not None and self.stream_encoder is not None:
+                # Use the last batch's images (already on device from _train_step)
+                last_images = images.to(self.device)
                 with torch.no_grad():
-                    z = self.model.context_encoder(images.to(self.device))
-                    t = self.model.target_encoder(images.to(self.device))
+                    z = self.model.context_encoder(last_images)
+                    t = self.model.target_encoder(last_images)
                 energy_fn = self.stream_encoder.make_energy_fn(t)
                 loop_result = self.recursive_loop.step(z, energy_fn, epoch=epoch)
                 if loop_result.get("crystallized"):

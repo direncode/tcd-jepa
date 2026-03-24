@@ -110,7 +110,18 @@ class MaskCollator:
                     logger.warning(
                         f"Valid mask not found, decreasing acceptable-regions [{tries}]"
                     )
-        mask = mask.squeeze()
+                    max_tries = len(acceptable_regions) + 1 if acceptable_regions is not None else 5
+                    if tries > max_tries:
+                        # All acceptable regions exhausted or too many retries;
+                        # fall back to unconstrained mask
+                        mask = torch.zeros((self.height, self.width), dtype=torch.int32)
+                        mask[top : top + h, left : left + w] = 1
+                        mask = torch.nonzero(mask.flatten())
+                        if len(mask) == 0:
+                            # Absolute fallback: use all patches
+                            mask = torch.arange(self.height * self.width).unsqueeze(-1)
+                        break
+        mask = mask.squeeze(-1)
 
         mask_complement = torch.ones((self.height, self.width), dtype=torch.int32)
         mask_complement[top : top + h, left : left + w] = 0
