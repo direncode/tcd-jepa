@@ -70,6 +70,9 @@ class TargetEncoder(nn.Module):
 def momentum_schedule(base_value: float, final_value: float, num_steps: int) -> Iterator[float]:
     """Generate a linear momentum schedule from base_value to final_value.
 
+    Yields values indefinitely — after ``num_steps`` it clamps at
+    ``final_value`` so callers never hit ``StopIteration``.
+
     Args:
         base_value: Starting momentum (e.g., 0.996).
         final_value: Final momentum (e.g., 1.0).
@@ -78,5 +81,9 @@ def momentum_schedule(base_value: float, final_value: float, num_steps: int) -> 
     Yields:
         Momentum value for each step.
     """
+    denom = max(num_steps - 1, 1)
     for i in range(num_steps):
-        yield base_value + i * (final_value - base_value) / max(num_steps - 1, 1)
+        yield base_value + i * (final_value - base_value) / denom
+    # Clamp at final value forever so callers never get StopIteration
+    while True:
+        yield final_value

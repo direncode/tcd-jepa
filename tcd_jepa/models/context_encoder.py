@@ -18,6 +18,10 @@ class ContextEncoder(nn.Module):
     Wraps a VisionTransformer encoder and instruments it with hooks to monitor
     representation statistics at each layer. This data feeds into System 2's
     exploration decisions in later phases.
+
+    Hooks are disabled by default and must be explicitly enabled via
+    ``enable_hooks()`` to avoid graph breaks in ``torch.compile`` and
+    unnecessary CPU–GPU synchronisation during training.
     """
 
     def __init__(self, encoder: VisionTransformer):
@@ -26,7 +30,7 @@ class ContextEncoder(nn.Module):
         # Statistics collected during forward pass
         self._layer_stats: list[dict[str, torch.Tensor]] = []
         self._hooks: list[torch.utils.hooks.RemovableHook] = []
-        self._register_hooks()
+        self._hooks_enabled = False
 
     @property
     def embed_dim(self) -> int:
@@ -40,11 +44,24 @@ class ContextEncoder(nn.Module):
     def patch_embed(self) -> nn.Module:
         return self.encoder.patch_embed
 
-    def _register_hooks(self) -> None:
-        """Register forward hooks on each transformer block to collect statistics."""
-        for i, block in enumerate(self.encoder.blocks):
-            hook = block.register_forward_hook(self._make_hook(i))
-            self._hooks.append(hook)
+    def enable_hooks(self) -> None:
+        """Enable layer-statistics hooks (adds CPU–GPU sync overhead)."""
+        if not self._hooks_enabled:
+            self._remove_hooks()
+            for i, block in enumerate(self.encoder.blocks):
+                hook = block.register_forward_hook(self._make_hook(i))
+                self._hooks.append(hook)
+            self._hooks_enabled = True
+
+    def disable_hooks(self) -> None:
+        """Disable hooks to allow clean torch.compile graphs."""
+        self._remove_hooks()
+        self._hooks_enabled = False
+
+    def _remove_hooks(self) -> None:
+        for h in self._hooks:
+            h.remove()
+        self._hooks.clear()
 
     def _make_hook(self, layer_idx: int):
         """Create a hook that records statistics for a specific layer."""
@@ -73,7 +90,7 @@ class ContextEncoder(nn.Module):
     def forward(
         self, x: torch.Tensor, masks: Optional[list[torch.Tensor]] = None
     ) -> torch.Tensor:
-        """Encode images with statistics collection.
+        """Encode images with optional statistics collection.
 
         Args:
             x: Input images [B, C, H, W].
@@ -82,7 +99,8 @@ class ContextEncoder(nn.Module):
         Returns:
             Encoded patch representations.
         """
-        self._layer_stats.clear()
+        if self._hooks_enabled:
+            self._layer_stats.clear()
         return self.encoder(x, masks=masks)
 
     def parameters(self, recurse: bool = True):

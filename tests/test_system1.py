@@ -50,9 +50,10 @@ class TestContextEncoder:
         assert out.shape == (2, 64, 64)
 
     def test_collects_layer_stats(self):
-        """ContextEncoder records statistics for each layer."""
+        """ContextEncoder records statistics for each layer when hooks enabled."""
         vit = VisionTransformer(img_size=[32], patch_size=4, embed_dim=64, depth=3, num_heads=2)
         encoder = ContextEncoder(vit)
+        encoder.enable_hooks()
         x = torch.randn(2, 3, 32, 32)
         encoder(x)
         stats = encoder.get_layer_stats()
@@ -66,6 +67,7 @@ class TestContextEncoder:
         """Stats are cleared between forward passes."""
         vit = VisionTransformer(img_size=[32], patch_size=4, embed_dim=64, depth=2, num_heads=2)
         encoder = ContextEncoder(vit)
+        encoder.enable_hooks()
         x = torch.randn(2, 3, 32, 32)
         encoder(x)
         assert len(encoder.get_layer_stats()) == 2

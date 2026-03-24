@@ -6,6 +6,9 @@ and torch.compile for maximum throughput on H100 GPUs.
 Launch with torchrun:
     torchrun --nproc_per_node=8 train_distributed.py --config configs/dist_cifar10.yaml
     torchrun --nproc_per_node=8 train_distributed.py --config configs/dist_imagenet.yaml --tcd
+
+For full error tracebacks on crash:
+    TORCHELASTIC_ERROR_FILE=/tmp/torch_error.json torchrun ...
 """
 
 import argparse
@@ -494,6 +497,10 @@ def main():
     param_count = sum(p.numel() for p in model.parameters())
     log_main(f"Model parameters: {param_count:,}")
 
+    # Disable context encoder hooks — they cause torch.compile recompilations
+    # and CPU–GPU sync overhead.  Stats can be re-enabled for analysis later.
+    model.context_encoder.disable_hooks()
+
     # Optional torch.compile
     if args.compile:
         log_main("Compiling model with torch.compile...")
@@ -650,4 +657,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        raise
