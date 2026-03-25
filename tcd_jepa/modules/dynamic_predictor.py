@@ -128,13 +128,27 @@ class DynamicPredictor(nn.Module):
         # Compute weighted module contributions
         module_outputs = []
         for module_id, module in modules:
-            contribution = module(z_flat)  # [B*N, D]
-            module_outputs.append(contribution)
+            try:
+                contribution = module(z_flat)  # [B*N, D]
+                if contribution.shape != z_flat.shape:
+                    logger.warning(
+                        f"Module {module_id} output shape {contribution.shape} != "
+                        f"expected {z_flat.shape} — skipping"
+                    )
+                    continue
+                module_outputs.append(contribution)
+            except Exception as e:
+                logger.warning(f"Module {module_id} forward failed: {e} — skipping")
+                continue
 
         if module_outputs:
             # Stack and apply routing: [B*N, M, D] * [B*N, M, 1] -> [B*N, D]
+            num_active = len(module_outputs)
             stacked = torch.stack(module_outputs, dim=1)  # [B*N, M, D]
-            weights = routing_weights.unsqueeze(-1)  # [B*N, M, 1]
+            # Re-compute routing for actual active modules (some may have been skipped)
+            if num_active != len(modules):
+                routing_weights = self.module_router(z_flat, num_active)
+            weights = routing_weights[:, :num_active].unsqueeze(-1)  # [B*N, M, 1]
             module_combined = (stacked * weights).sum(dim=1)  # [B*N, D]
 
             # Normalize module output

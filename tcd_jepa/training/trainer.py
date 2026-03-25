@@ -10,6 +10,11 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from tcd_jepa.models.tcd_jepa_model import TCDJEPAModel
+from tcd_jepa.training.guards import (
+    LossTracker,
+    check_loss_health,
+    compute_gradient_stats,
+)
 from tcd_jepa.training.metrics import TrainingMetrics
 from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
 from tcd_jepa.utils.checkpointing import save_checkpoint
@@ -40,6 +45,7 @@ class Trainer:
         scaler: Optional[torch.amp.GradScaler] = None,
         recursive_loop=None,
         stream_encoder=None,
+        eval_runner=None,
     ):
         self.model = model
         self.optimizer = optimizer
@@ -57,12 +63,16 @@ class Trainer:
         self.grad_clip_norm = cfg.get("training", {}).get("grad_clip_norm", 1.0)
         self.recursive_loop = recursive_loop
         self.stream_encoder = stream_encoder
+        self.eval_runner = eval_runner
         self.global_step = 0
         self._known_module_ids: set[str] = set()
+        self._loss_tracker = LossTracker()
 
     def train(self, num_epochs: int, start_epoch: int = 0) -> None:
         """Run the training loop."""
         self.model.train()
+
+        eval_freq = self.cfg.get("evaluation", {}).get("eval_freq", 10)
 
         for epoch in range(start_epoch, num_epochs):
             epoch_metrics = TrainingMetrics()
@@ -71,13 +81,19 @@ class Trainer:
             for itr, (images, masks_enc, masks_pred) in enumerate(
                 tqdm(self.train_loader, desc=f"Epoch {epoch}", leave=False)
             ):
-                loss, new_lr, new_wd, new_m = self._train_step(images, masks_enc, masks_pred)
+                step_result = self._train_step(images, masks_enc, masks_pred)
 
                 epoch_metrics.update(
-                    loss=loss,
-                    lr=new_lr,
-                    wd=new_wd,
-                    momentum=new_m,
+                    loss=step_result["loss"],
+                    lr=step_result["lr"],
+                    wd=step_result["wd"],
+                    momentum=step_result["momentum"],
+                    grad_norm=step_result["grad_norm"],
+                    param_norm=step_result["param_norm"],
+                    nan_count=step_result["nan_count"],
+                    inf_count=step_result["inf_count"],
+                    is_spike=step_result["is_spike"],
+                    skipped=step_result["skipped"],
                 )
                 self.global_step += 1
 
@@ -104,11 +120,19 @@ class Trainer:
                 metrics_dict["num_modules"] = self.recursive_loop.num_modules
                 metrics_dict["converged"] = self.recursive_loop.is_converged
 
+            # GPU memory stats
+            if torch.cuda.is_available():
+                metrics_dict["gpu_memory_allocated_mb"] = torch.cuda.memory_allocated() / 1e6
+                metrics_dict["gpu_memory_peak_mb"] = torch.cuda.max_memory_allocated() / 1e6
+
             logger.info(
                 f"Epoch {epoch}: loss={metrics_dict['loss']:.4f} "
-                f"lr={metrics_dict['lr']:.6f} time={epoch_time:.1f}s"
+                f"lr={metrics_dict['lr']:.6f} time={epoch_time:.1f}s "
+                f"grad_norm={metrics_dict['grad_norm_avg']:.4f}"
                 + (f" modules={self.recursive_loop.num_modules}"
                    if self.recursive_loop else "")
+                + (f" nan={metrics_dict['nan_count']}" if metrics_dict["nan_count"] > 0 else "")
+                + (f" spikes={metrics_dict['loss_spikes']}" if metrics_dict["loss_spikes"] > 0 else "")
             )
 
             if self.metric_logger is not None:
@@ -126,6 +150,15 @@ class Trainer:
                     optimizer=self.optimizer,
                     scaler=self.scaler,
                 )
+
+            # Run evaluation if configured
+            if self.eval_runner is not None and (epoch + 1) % eval_freq == 0:
+                eval_metrics = self.eval_runner.run_evaluation(epoch)
+                if self.metric_logger is not None:
+                    self.metric_logger.log(
+                        {"epoch": epoch, **{f"eval/{k}": v for k, v in eval_metrics.items()}},
+                        step=epoch,
+                    )
 
     def _register_new_module_params(self) -> None:
         """Add newly crystallized module parameters to the optimizer."""
@@ -156,11 +189,11 @@ class Trainer:
         images: torch.Tensor,
         masks_enc: list[torch.Tensor],
         masks_pred: list[torch.Tensor],
-    ) -> tuple[float, float, float, float]:
+    ) -> dict:
         """Execute a single training step.
 
         Returns:
-            Tuple of (loss_value, learning_rate, weight_decay, momentum).
+            Dict with loss, lr, wd, momentum, grad stats, and skip indicators.
         """
         # Move data to device
         images = images.to(self.device)
@@ -172,16 +205,31 @@ class Trainer:
             result = self.model(images, masks_enc, masks_pred)
             loss = result["loss"]
 
+        # Check loss health before backward
+        loss_healthy = check_loss_health(loss)
+        if not loss_healthy:
+            # Skip this step entirely — advance schedules but don't update weights/EMA
+            new_lr = self.lr_scheduler.step()
+            new_wd = self.wd_scheduler.step()
+            new_m = next(self.momentum_schedule)
+            return {
+                "loss": 0.0, "lr": new_lr, "wd": new_wd, "momentum": new_m,
+                "grad_norm": 0.0, "param_norm": 0.0,
+                "nan_count": 1, "inf_count": 0, "is_spike": False, "skipped": True,
+            }
+
         # Backward pass with gradient clipping
         self.optimizer.zero_grad()
         if self.scaler is not None:
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
+            grad_stats = compute_gradient_stats(self.model)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
             loss.backward()
+            grad_stats = compute_gradient_stats(self.model)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
             self.optimizer.step()
 
@@ -190,10 +238,28 @@ class Trainer:
         new_wd = self.wd_scheduler.step()
         new_m = next(self.momentum_schedule)
 
-        # EMA update of target encoder
-        self.model.update_target_encoder(new_m)
+        # Check for loss spike and gradient health before EMA update
+        loss_val = loss.item()
+        is_spike = self._loss_tracker.update(loss_val)
+        skip_ema = is_spike or not grad_stats.is_healthy
 
-        return loss.item(), new_lr, new_wd, new_m
+        if not skip_ema:
+            self.model.update_target_encoder(new_m)
+        else:
+            logger.warning("Skipping EMA update due to unhealthy step")
+
+        return {
+            "loss": loss_val,
+            "lr": new_lr,
+            "wd": new_wd,
+            "momentum": new_m,
+            "grad_norm": grad_stats.grad_norm,
+            "param_norm": grad_stats.param_norm,
+            "nan_count": grad_stats.nan_count,
+            "inf_count": grad_stats.inf_count,
+            "is_spike": is_spike,
+            "skipped": False,
+        }
 
 
 def build_optimizer(

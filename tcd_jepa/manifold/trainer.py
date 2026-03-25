@@ -14,6 +14,11 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from tcd_jepa.manifold.model import ManifoldJEPAModel
+from tcd_jepa.training.guards import (
+    LossTracker,
+    check_loss_health,
+    compute_gradient_stats,
+)
 from tcd_jepa.training.metrics import TrainingMetrics
 from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
 from tcd_jepa.utils.checkpointing import save_checkpoint
@@ -50,6 +55,8 @@ class ManifoldTrainer:
         self.recursive_loop = recursive_loop
         self.global_step = 0
         self._known_module_ids: set[str] = set()
+        self.grad_clip_norm = cfg.get("training", {}).get("grad_clip_norm", 1.0)
+        self._loss_tracker = LossTracker()
 
     def train(self, num_epochs: int, start_epoch: int = 0) -> None:
         self.model.train()
@@ -61,8 +68,19 @@ class ManifoldTrainer:
             for itr, (batch_data, masks_enc, masks_pred) in enumerate(
                 tqdm(self.train_loader, desc=f"Epoch {epoch}", leave=False)
             ):
-                loss, new_lr, new_wd, new_m = self._train_step(batch_data, masks_enc, masks_pred)
-                epoch_metrics.update(loss=loss, lr=new_lr, wd=new_wd, momentum=new_m)
+                step_result = self._train_step(batch_data, masks_enc, masks_pred)
+                epoch_metrics.update(
+                    loss=step_result["loss"],
+                    lr=step_result["lr"],
+                    wd=step_result["wd"],
+                    momentum=step_result["momentum"],
+                    grad_norm=step_result["grad_norm"],
+                    param_norm=step_result["param_norm"],
+                    nan_count=step_result["nan_count"],
+                    inf_count=step_result["inf_count"],
+                    is_spike=step_result["is_spike"],
+                    skipped=step_result["skipped"],
+                )
                 self.global_step += 1
 
             # TCD crystallization at end of epoch
@@ -80,8 +98,10 @@ class ManifoldTrainer:
 
             logger.info(
                 f"Epoch {epoch}: loss={metrics_dict['loss']:.4f} "
-                f"lr={metrics_dict['lr']:.6f} time={epoch_time:.1f}s"
+                f"lr={metrics_dict['lr']:.6f} time={epoch_time:.1f}s "
+                f"grad_norm={metrics_dict['grad_norm_avg']:.4f}"
                 + (f" modules={self.recursive_loop.num_modules}" if self.recursive_loop else "")
+                + (f" nan={metrics_dict['nan_count']}" if metrics_dict["nan_count"] > 0 else "")
             )
 
             save_freq = self.cfg.get("training", {}).get("checkpoint_freq", 10)
@@ -97,7 +117,7 @@ class ManifoldTrainer:
                 )
 
     def _run_recursive_loop(self, batch_data: dict, epoch: int) -> None:
-        """Run TCD Systems 2→3 on the last batch."""
+        """Run TCD Systems 2->3 on the last batch."""
         with torch.no_grad():
             bd = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v
                   for k, v in batch_data.items()}
@@ -146,7 +166,8 @@ class ManifoldTrainer:
 
     def _train_step(
         self, batch_data: dict, masks_enc: list[torch.Tensor], masks_pred: list[torch.Tensor],
-    ) -> tuple[float, float, float, float]:
+    ) -> dict:
+        """Execute a single training step with NaN guards and gradient clipping."""
         batch_data = {
             k: v.to(self.device) if isinstance(v, torch.Tensor) else v
             for k, v in batch_data.items()
@@ -157,13 +178,47 @@ class ManifoldTrainer:
         result = self.model(batch_data, masks_enc, masks_pred)
         loss = result["loss"]
 
+        # Check loss health before backward
+        loss_healthy = check_loss_health(loss)
+        if not loss_healthy:
+            new_lr = self.lr_scheduler.step()
+            new_wd = self.wd_scheduler.step()
+            new_m = next(self.momentum_schedule)
+            return {
+                "loss": 0.0, "lr": new_lr, "wd": new_wd, "momentum": new_m,
+                "grad_norm": 0.0, "param_norm": 0.0,
+                "nan_count": 1, "inf_count": 0, "is_spike": False, "skipped": True,
+            }
+
         self.optimizer.zero_grad()
         loss.backward()
+        grad_stats = compute_gradient_stats(self.model)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
         self.optimizer.step()
 
         new_lr = self.lr_scheduler.step()
         new_wd = self.wd_scheduler.step()
         new_m = next(self.momentum_schedule)
-        self.model.update_target_encoder(new_m)
 
-        return loss.item(), new_lr, new_wd, new_m
+        # Check for spike/gradient health before EMA update
+        loss_val = loss.item()
+        is_spike = self._loss_tracker.update(loss_val)
+        skip_ema = is_spike or not grad_stats.is_healthy
+
+        if not skip_ema:
+            self.model.update_target_encoder(new_m)
+        else:
+            logger.warning("Skipping EMA update due to unhealthy step")
+
+        return {
+            "loss": loss_val,
+            "lr": new_lr,
+            "wd": new_wd,
+            "momentum": new_m,
+            "grad_norm": grad_stats.grad_norm,
+            "param_norm": grad_stats.param_norm,
+            "nan_count": grad_stats.nan_count,
+            "inf_count": grad_stats.inf_count,
+            "is_spike": is_spike,
+            "skipped": False,
+        }

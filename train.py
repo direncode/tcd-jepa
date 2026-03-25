@@ -25,6 +25,7 @@ from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
 from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
 from tcd_jepa.training.trainer import Trainer, build_optimizer
 from tcd_jepa.utils.config import load_config_with_overrides
+from tcd_jepa.utils.config_validation import validate_config
 from tcd_jepa.utils.logging import MetricLogger
 from tcd_jepa.utils.masking import MaskCollator
 
@@ -74,6 +75,11 @@ def build_dataloader(cfg: dict, mask_collator: MaskCollator) -> DataLoader:
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
+    seed = train_cfg.get("seed", 42)
+
+    def worker_init_fn(worker_id: int) -> None:
+        torch.manual_seed(seed + worker_id)
+
     return DataLoader(
         dataset,
         batch_size=train_cfg.get("batch_size", 64),
@@ -81,6 +87,7 @@ def build_dataloader(cfg: dict, mask_collator: MaskCollator) -> DataLoader:
         num_workers=data_cfg.get("num_workers", 2),
         collate_fn=mask_collator,
         drop_last=True,
+        worker_init_fn=worker_init_fn,
     )
 
 
@@ -92,13 +99,28 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config_with_overrides(args.config, args.overrides)
+
+    # Validate config
+    errors = validate_config(cfg)
+    if errors:
+        for e in errors:
+            logger.error(f"Config error: {e}")
+        raise ValueError(f"Invalid config: {len(errors)} error(s)")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Device: {device}")
 
-    # Seed
+    # Seed and determinism
     seed = cfg.get("training", {}).get("seed", 42)
     torch.manual_seed(seed)
     np.random.seed(seed)
+
+    if cfg.get("training", {}).get("deterministic", True):
+        torch.use_deterministic_algorithms(True, warn_only=True)
+        if torch.cuda.is_available():
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        logger.info("Deterministic mode enabled")
 
     enc_cfg = cfg["model"]["encoder"]
     pred_cfg = cfg["model"]["predictor"]

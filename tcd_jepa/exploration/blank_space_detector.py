@@ -58,7 +58,7 @@ class BlankSpaceDetector:
 
         num_dirs = min(D, self.num_hessian_directions)
         directions = torch.randn(num_dirs, D, device=z.device)
-        directions = directions / directions.norm(dim=-1, keepdim=True)
+        directions = directions / (directions.norm(dim=-1, keepdim=True) + 1e-8)
 
         curvatures = []
         for i in range(num_dirs):

@@ -6,6 +6,8 @@ reusable predictor modules.
 """
 
 
+import logging
+
 import torch
 import torch.nn as nn
 
@@ -14,6 +16,8 @@ from tcd_jepa.modules.module_registry import ModuleRegistry
 from tcd_jepa.topology.feature_extraction import TopologicalFeatureExtractor
 from tcd_jepa.topology.persistence_diagrams import PersistenceDiagramAnalyzer
 from tcd_jepa.topology.persistent_homology import PersistentHomologyComputer
+
+logger = logging.getLogger("tcd_jepa")
 
 
 class ModuleCrystallizer:
@@ -77,6 +81,20 @@ class ModuleCrystallizer:
                 'num_features': number of topological features found
                 'total_persistence': sum of all persistence values
         """
+        # Guard: check point cloud has sufficient points for PH
+        if point_cloud.shape[0] < 2:
+            logger.info(
+                f"Insufficient points for crystallization ({point_cloud.shape[0]} < 2) — skipping"
+            )
+            return {
+                "new_modules": [],
+                "pruned_modules": [],
+                "ph_analysis": {},
+                "num_features": 0,
+                "total_persistence": 0.0,
+                "registry_stats": self.registry.get_statistics(),
+            }
+
         # Step 1: Compute persistent homology
         ph_result = self.ph_computer.compute(
             point_cloud, max_points=self.max_points_for_ph

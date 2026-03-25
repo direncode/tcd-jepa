@@ -29,7 +29,7 @@ training:
   checkpoint_freq: 10
   seed: 42
   grad_clip_norm: 1.0
-  deterministic: false
+  deterministic: true
 
 tcd:
   max_explore: 256
@@ -50,6 +50,12 @@ masking:
   enc_mask_scale: [0.15, 0.2]
   pred_mask_scale: [0.2, 0.4]
   aspect_ratio: [0.75, 1.5]
+
+evaluation:
+  enabled: true
+  eval_freq: 10
+  linear_probe_epochs: 100
+  knn_k: [1, 5, 20]
 
 logging:
   use_wandb: false

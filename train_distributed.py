@@ -39,10 +39,16 @@ from tcd_jepa.core.system1_encoder import StreamEncoder
 from tcd_jepa.exploration.langevin import LangevinSampler
 from tcd_jepa.models.target_encoder import momentum_schedule
 from tcd_jepa.models.tcd_jepa_model import TCDJEPAModel, build_tcd_jepa
+from tcd_jepa.training.guards import (
+    LossTracker,
+    check_loss_health,
+    compute_gradient_stats,
+)
 from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
 from tcd_jepa.training.trainer import build_optimizer
 from tcd_jepa.utils.checkpointing import load_checkpoint, save_checkpoint
 from tcd_jepa.utils.config import load_config_with_overrides
+from tcd_jepa.utils.config_validation import validate_config
 from tcd_jepa.utils.logging import MetricLogger
 from tcd_jepa.utils.masking import MaskCollator
 
@@ -289,6 +295,7 @@ class DistributedTrainer:
         self.grad_clip_norm = train_cfg.get("grad_clip_norm", 1.0)
         # AMP autocast only for DDP — FSDP handles its own mixed precision
         self.use_amp = scaler is not None and strategy != "fsdp"
+        self._loss_tracker = LossTracker()
 
     def train(self, num_epochs: int, start_epoch: int = 0) -> None:
         """Run the distributed training loop."""
@@ -310,15 +317,31 @@ class DistributedTrainer:
             num_batches = 0
             t0 = time.time()
 
+            epoch_grad_norm_sum = 0.0
+            epoch_grad_norm_max = 0.0
+            epoch_nan_count = 0
+            epoch_loss_spikes = 0
+            epoch_skipped = 0
+
             for itr, (images, masks_enc, masks_pred) in enumerate(self.train_loader):
-                loss_val, tcd_loss_val, lr, wd, momentum = self._train_step(
+                step_result = self._train_step(
                     images, masks_enc, masks_pred,
                     use_tcd=use_tcd,
                     tcd_weight=tcd_weight,
                     diff_steps=diff_steps,
                 )
-                epoch_loss += loss_val
-                epoch_tcd_loss += tcd_loss_val
+                epoch_loss += step_result["loss"]
+                epoch_tcd_loss += step_result["tcd_loss"]
+                lr = step_result["lr"]
+                wd = step_result["wd"]
+                momentum = step_result["momentum"]
+                epoch_grad_norm_sum += step_result["grad_norm"]
+                epoch_grad_norm_max = max(epoch_grad_norm_max, step_result["grad_norm"])
+                epoch_nan_count += step_result["nan_count"]
+                if step_result["is_spike"]:
+                    epoch_loss_spikes += 1
+                if step_result["skipped"]:
+                    epoch_skipped += 1
                 num_batches += 1
                 self.global_step += 1
 
@@ -340,6 +363,8 @@ class DistributedTrainer:
                         logger.info(f"  Recursive loop: {n_mods} active modules")
                     # Broadcast new module parameters from rank 0 to all ranks
                     self._sync_crystallized_modules()
+                    # Barrier ensures all ranks have synced before updating optimizer
+                    dist.barrier()
                     self._register_new_module_params()
 
             # Logging (rank 0 only)
@@ -348,6 +373,8 @@ class DistributedTrainer:
                 avg_loss = epoch_loss / max(num_batches, 1)
                 avg_tcd = epoch_tcd_loss / max(num_batches, 1)
 
+                avg_grad_norm = epoch_grad_norm_sum / max(num_batches, 1)
+
                 metrics_dict = {
                     "epoch": epoch,
                     "loss": avg_loss,
@@ -355,7 +382,16 @@ class DistributedTrainer:
                     "wd": wd,
                     "momentum": momentum,
                     "epoch_time": epoch_time,
+                    "grad_norm_avg": avg_grad_norm,
+                    "grad_norm_max": epoch_grad_norm_max,
+                    "nan_count": epoch_nan_count,
+                    "loss_spikes": epoch_loss_spikes,
+                    "skipped_steps": epoch_skipped,
                 }
+
+                if torch.cuda.is_available():
+                    metrics_dict["gpu_memory_allocated_mb"] = torch.cuda.memory_allocated() / 1e6
+                    metrics_dict["gpu_memory_peak_mb"] = torch.cuda.max_memory_allocated() / 1e6
 
                 if use_tcd:
                     metrics_dict["tcd_loss"] = avg_tcd
@@ -365,10 +401,13 @@ class DistributedTrainer:
                     metrics_dict["converged"] = self.recursive_loop.is_converged
 
                 logger.info(
-                    f"Epoch {epoch}: loss={avg_loss:.4f} lr={lr:.6f} time={epoch_time:.1f}s"
+                    f"Epoch {epoch}: loss={avg_loss:.4f} lr={lr:.6f} time={epoch_time:.1f}s "
+                    f"grad_norm={avg_grad_norm:.4f}"
                     + (f" tcd_loss={avg_tcd:.4f}" if use_tcd else "")
                     + (f" modules={self.recursive_loop.num_modules}"
                        if self.recursive_loop else "")
+                    + (f" nan={epoch_nan_count}" if epoch_nan_count > 0 else "")
+                    + (f" spikes={epoch_loss_spikes}" if epoch_loss_spikes > 0 else "")
                 )
 
                 if self.metric_logger is not None:
@@ -387,11 +426,11 @@ class DistributedTrainer:
         use_tcd: bool = False,
         tcd_weight: float = 0.1,
         diff_steps: int = 5,
-    ) -> tuple[float, float, float, float, float]:
+    ) -> dict:
         """Execute a single distributed training step.
 
         Returns:
-            Tuple of (loss, tcd_loss, lr, wd, momentum).
+            Dict with loss, tcd_loss, lr, wd, momentum, grad stats, and skip indicators.
         """
         images = images.to(self.device)
         masks_enc = [m.to(self.device) for m in masks_enc]
@@ -422,11 +461,24 @@ class DistributedTrainer:
                 result = self.model(images, masks_enc, masks_pred)
                 loss = result["loss"]
 
+        # Check loss health before backward
+        loss_healthy = check_loss_health(loss)
+        if not loss_healthy:
+            new_lr = self.lr_scheduler.step()
+            new_wd = self.wd_scheduler.step()
+            new_m = next(self.momentum_schedule)
+            return {
+                "loss": 0.0, "tcd_loss": 0.0, "lr": new_lr, "wd": new_wd,
+                "momentum": new_m, "grad_norm": 0.0, "param_norm": 0.0,
+                "nan_count": 1, "inf_count": 0, "is_spike": False, "skipped": True,
+            }
+
         # Backward pass with gradient clipping
         self.optimizer.zero_grad()
         if self.scaler is not None:
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
+            grad_stats = compute_gradient_stats(self.model)
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), self.grad_clip_norm
             )
@@ -434,6 +486,7 @@ class DistributedTrainer:
             self.scaler.update()
         else:
             loss.backward()
+            grad_stats = compute_gradient_stats(self.model)
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), self.grad_clip_norm
             )
@@ -444,10 +497,23 @@ class DistributedTrainer:
         new_wd = self.wd_scheduler.step()
         new_m = next(self.momentum_schedule)
 
-        # EMA update of target encoder (on raw model)
-        self.raw_model.update_target_encoder(new_m)
+        # Check for spike/gradient health before EMA update
+        loss_val = loss.item()
+        is_spike = self._loss_tracker.update(loss_val)
+        skip_ema = is_spike or not grad_stats.is_healthy
 
-        return loss.item(), tcd_loss_val, new_lr, new_wd, new_m
+        if not skip_ema:
+            self.raw_model.update_target_encoder(new_m)
+        elif self.rank == 0:
+            logger.warning("Skipping EMA update due to unhealthy step")
+
+        return {
+            "loss": loss_val, "tcd_loss": tcd_loss_val,
+            "lr": new_lr, "wd": new_wd, "momentum": new_m,
+            "grad_norm": grad_stats.grad_norm, "param_norm": grad_stats.param_norm,
+            "nan_count": grad_stats.nan_count, "inf_count": grad_stats.inf_count,
+            "is_spike": is_spike, "skipped": False,
+        }
 
     def _save_checkpoint(self, epoch: int) -> None:
         """Save a training checkpoint (rank 0 only)."""
@@ -470,15 +536,41 @@ class DistributedTrainer:
     def _sync_crystallized_modules(self) -> None:
         """Broadcast crystallized module parameters from rank 0 to all ranks.
 
-        Ensures all DDP replicas have identical module parameters after
-        crystallization, which only runs on local data per rank.
+        Uses batched broadcast (flatten all params per module into one tensor)
+        for efficiency instead of per-parameter broadcast.
         """
         if not dist.is_initialized() or self.recursive_loop is None:
             return
+
+        # Barrier to ensure all ranks are ready for sync
+        dist.barrier()
+
         registry = self.recursive_loop.crystallizer.registry
         for _, module in registry.get_all_modules():
-            for param in module.parameters():
-                dist.broadcast(param.data, src=0)
+            params = list(module.parameters())
+            if not params:
+                continue
+            # Flatten all params into single tensor, broadcast once, unflatten
+            flat = torch.cat([p.data.reshape(-1) for p in params])
+            dist.broadcast(flat, src=0)
+            offset = 0
+            for p in params:
+                numel = p.numel()
+                p.data.copy_(flat[offset:offset + numel].reshape(p.shape))
+                offset += numel
+
+        # Validate all ranks agree on parameter count
+        local_count = torch.tensor(
+            [sum(p.numel() for _, m in registry.get_all_modules() for p in m.parameters())],
+            device=self.device,
+        )
+        dist.all_reduce(local_count, op=dist.ReduceOp.MAX)
+        expected = sum(p.numel() for _, m in registry.get_all_modules() for p in m.parameters())
+        if expected != local_count.item():
+            logger.error(
+                f"Rank {self.rank}: parameter count mismatch after sync "
+                f"(local={expected}, max={local_count.item()})"
+            )
 
     def _register_new_module_params(self) -> None:
         """Add newly crystallized module parameters to the optimizer."""
@@ -553,6 +645,11 @@ def build_distributed_dataloader(
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
+    seed = train_cfg.get("seed", 42)
+
+    def worker_init_fn(worker_id: int) -> None:
+        torch.manual_seed(seed + rank + worker_id)
+
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
     dataloader = DataLoader(
         dataset,
@@ -562,6 +659,7 @@ def build_distributed_dataloader(
         collate_fn=mask_collator,
         drop_last=True,
         pin_memory=True,
+        worker_init_fn=worker_init_fn,
     )
     return dataloader, sampler
 
@@ -619,6 +717,15 @@ def main() -> None:
 
     # Load config
     cfg = load_config_with_overrides(args.config, args.overrides)
+
+    # Validate config
+    errors = validate_config(cfg)
+    if errors:
+        if rank == 0:
+            for e in errors:
+                logger.error(f"Config error: {e}")
+        raise ValueError(f"Invalid config: {len(errors)} error(s)")
+
     train_cfg = cfg.get("training", {})
 
     # Override from config if CLI args not explicitly set
@@ -634,12 +741,13 @@ def main() -> None:
     torch.manual_seed(seed + rank)
     np.random.seed(seed + rank)
 
-    # Optional CUDA determinism (hurts perf but ensures reproducibility)
-    if train_cfg.get("deterministic", False):
+    # CUDA determinism (hurts perf but ensures reproducibility)
+    if train_cfg.get("deterministic", True):
+        torch.use_deterministic_algorithms(True, warn_only=True)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
         if rank == 0:
-            logger.info("CUDA deterministic mode enabled")
+            logger.info("Deterministic mode enabled")
     else:
         torch.backends.cudnn.benchmark = True
 

@@ -1,7 +1,11 @@
 """Loss functions for JEPA training."""
 
+import logging
+
 import torch
 import torch.nn.functional as F
+
+logger = logging.getLogger("tcd_jepa")
 
 
 def jepa_loss(predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -17,6 +21,11 @@ def jepa_loss(predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     Returns:
         Scalar loss value.
     """
+    if __debug__:
+        if torch.isnan(predictions).any():
+            logger.warning("NaN detected in predictions input to jepa_loss")
+        if torch.isnan(targets).any():
+            logger.warning("NaN detected in targets input to jepa_loss")
     return F.smooth_l1_loss(predictions, targets)
 
 
@@ -49,6 +58,11 @@ def tcd_auxiliary_loss(
     Returns:
         Scalar TCD auxiliary loss.
     """
+    # Guard against NaN energy values
+    if torch.isnan(energy_pre).any() or torch.isnan(energy_post).any():
+        logger.warning("NaN energy values in tcd_auxiliary_loss — returning zero loss")
+        return torch.tensor(0.0, device=energy_pre.device, requires_grad=True)
+
     # Margin-based improvement: want energy_post < energy_pre - margin
     improvement_loss = F.relu(energy_post - energy_pre + margin).mean()
 
