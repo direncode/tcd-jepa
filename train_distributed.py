@@ -163,7 +163,7 @@ class FaultTolerantTrainer:
     def monitored_barrier(self, step: int) -> None:
         """Run monitored_barrier for NCCL timeout detection."""
         if step > 0 and step % self.barrier_freq == 0 and dist.is_initialized():
-            dist.monitored_barrier(timeout=dist.get_default_timeout())
+            dist.monitored_barrier()
 
     def emergency_save(
         self,
