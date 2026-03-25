@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 
 from tcd_jepa.core.recursive_loop import RecursiveLoop
 from tcd_jepa.core.system1_encoder import StreamEncoder
+from tcd_jepa.evaluation.eval_runner import EvaluationRunner
 from tcd_jepa.models.target_encoder import momentum_schedule
 from tcd_jepa.models.tcd_jepa_model import build_tcd_jepa
 from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule
@@ -36,20 +37,29 @@ logging.basicConfig(
 logger = logging.getLogger("tcd_jepa")
 
 
+def _build_cifar10_transform(img_size: int, train: bool = True) -> T.Compose:
+    """Build CIFAR-10 transform for train or test."""
+    transforms = []
+    if img_size != 32:
+        transforms.append(T.Resize(img_size))
+    if train:
+        transforms.append(T.RandomHorizontalFlip())
+    transforms.extend([
+        T.ToTensor(),
+        T.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+    ])
+    return T.Compose(transforms)
+
+
 def build_dataloader(cfg: dict, mask_collator: MaskCollator) -> DataLoader:
-    """Build dataloader from config."""
+    """Build training dataloader from config."""
     data_cfg = cfg.get("data", {})
     train_cfg = cfg.get("training", {})
     dataset_name = data_cfg.get("dataset", "cifar10")
     img_size = data_cfg.get("img_size", 32)
 
     if dataset_name == "cifar10":
-        transform = T.Compose([
-            T.Resize(img_size) if img_size != 32 else T.Lambda(lambda x: x),
-            T.RandomHorizontalFlip(),
-            T.ToTensor(),
-            T.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
-        ])
+        transform = _build_cifar10_transform(img_size, train=True)
         dataset = torchvision.datasets.CIFAR10(
             root=data_cfg.get("data_dir", "./data"),
             train=True, download=True, transform=transform,
@@ -89,6 +99,36 @@ def build_dataloader(cfg: dict, mask_collator: MaskCollator) -> DataLoader:
         drop_last=True,
         worker_init_fn=worker_init_fn,
     )
+
+
+def build_eval_dataloaders(
+    cfg: dict, img_size: int, batch_size: int = 256,
+) -> tuple[DataLoader, DataLoader] | None:
+    """Build labeled train/test dataloaders for evaluation.
+
+    Returns None if dataset doesn't support labeled evaluation.
+    """
+    data_cfg = cfg.get("data", {})
+    dataset_name = data_cfg.get("dataset", "cifar10")
+
+    if dataset_name != "cifar10":
+        return None
+
+    train_transform = _build_cifar10_transform(img_size, train=False)
+    test_transform = _build_cifar10_transform(img_size, train=False)
+
+    train_dataset = torchvision.datasets.CIFAR10(
+        root=data_cfg.get("data_dir", "./data"),
+        train=True, download=False, transform=train_transform,
+    )
+    test_dataset = torchvision.datasets.CIFAR10(
+        root=data_cfg.get("data_dir", "./data"),
+        train=False, download=True, transform=test_transform,
+    )
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+    return train_loader, test_loader
 
 
 def main():
@@ -211,6 +251,23 @@ def main():
     if train_cfg.get("use_bfloat16", False) and device.type == "cuda":
         scaler = torch.amp.GradScaler()
 
+    # Evaluation runner (if dataset supports labels)
+    eval_runner = None
+    eval_cfg = cfg.get("evaluation", {})
+    if eval_cfg.get("enabled", False):
+        eval_loaders = build_eval_dataloaders(cfg, img_size)
+        if eval_loaders is not None:
+            eval_train_loader, eval_test_loader = eval_loaders
+            eval_runner = EvaluationRunner(
+                encoder=model.context_encoder,
+                train_loader=eval_train_loader,
+                test_loader=eval_test_loader,
+                device=device,
+                num_classes=10,
+                eval_cfg=eval_cfg,
+            )
+            logger.info("Evaluation pipeline enabled (linear probe + k-NN)")
+
     # Build trainer
     trainer = Trainer(
         model=model,
@@ -226,6 +283,7 @@ def main():
         scaler=scaler,
         recursive_loop=recursive_loop,
         stream_encoder=stream_encoder,
+        eval_runner=eval_runner,
     )
 
     logger.info(f"Starting training for {num_epochs} epochs")

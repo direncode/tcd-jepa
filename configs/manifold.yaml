@@ -34,6 +34,8 @@ training:
   optimizer: adamw
   checkpoint_freq: 10
   seed: 42
+  deterministic: true
+  grad_clip_norm: 1.0
 
 data:
   dataset: synthetic_manifold   # or "latent_ocean" with data_dir
