@@ -793,7 +793,10 @@ def main() -> None:
     if strategy == "fsdp":
         model = wrap_fsdp(model, local_rank)
     else:
-        model = DDP(model, device_ids=[local_rank])
+        model = DDP(
+            model, device_ids=[local_rank],
+            find_unused_parameters=args.tcd,  # DynamicPredictor params unused until modules crystallize
+        )
 
     # Build data
     mask_collator = MaskCollator(
