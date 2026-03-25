@@ -33,7 +33,7 @@ training:
   strategy: ddp
   activation_checkpointing: false
   max_retries: 3
-  tcd_weight: 0.1
+  tcd_weight: 0.001          # reduced from 0.1 — high tcd_weight destabilizes training
   langevin_diff_steps: 5
   monitored_barrier_freq: 100
   grad_clip_norm: 1.0

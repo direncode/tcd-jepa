@@ -613,6 +613,14 @@ def build_distributed_dataloader(
     dataset_name = data_cfg.get("dataset", "cifar10")
     img_size = data_cfg.get("img_size", 32)
 
+    class DropLabel(torch.utils.data.Dataset):
+        def __init__(self, ds):
+            self.ds = ds
+        def __len__(self):
+            return len(self.ds)
+        def __getitem__(self, idx):
+            return self.ds[idx][0]
+
     if dataset_name == "cifar10":
         transform = T.Compose([
             T.Resize(img_size) if img_size != 32 else T.Lambda(lambda x: x),
@@ -624,15 +632,24 @@ def build_distributed_dataloader(
             root=data_cfg.get("data_dir", "./data"),
             train=True, download=(rank == 0), transform=transform,
         )
+        dataset = DropLabel(dataset)
 
-        class DropLabel(torch.utils.data.Dataset):
-            def __init__(self, ds):
-                self.ds = ds
-            def __len__(self):
-                return len(self.ds)
-            def __getitem__(self, idx):
-                return self.ds[idx][0]
-
+    elif dataset_name == "imagenet":
+        from pathlib import Path as _Path
+        data_dir = data_cfg.get("data_dir", "./data/imagenet")
+        train_dir = _Path(data_dir) / "train"
+        if not train_dir.exists():
+            raise FileNotFoundError(
+                f"ImageNet train directory not found: {train_dir}\n"
+                f"Download ImageNet and extract to: {data_dir}/train/ and {data_dir}/val/"
+            )
+        transform = T.Compose([
+            T.RandomResizedCrop(img_size, scale=(0.2, 1.0)),
+            T.RandomHorizontalFlip(),
+            T.ToTensor(),
+            T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ])
+        dataset = torchvision.datasets.ImageFolder(str(train_dir), transform=transform)
         dataset = DropLabel(dataset)
 
     elif dataset_name == "two_rooms":

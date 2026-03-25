@@ -1,0 +1,78 @@
+# ImageNet small config — ViT-Small, 100 epochs
+# Faster iteration for validating TCD before full ViT-Base run
+#
+# Usage:
+#   torchrun --nproc_per_node=3 train_distributed.py --config configs/imagenet_small.yaml
+#   torchrun --nproc_per_node=3 train_distributed.py --config configs/imagenet_small.yaml --tcd
+
+model:
+  encoder:
+    img_size: 224
+    patch_size: 16
+    in_chans: 3
+    embed_dim: 384
+    depth: 12
+    num_heads: 6
+    mlp_ratio: 4.0
+  predictor:
+    predictor_embed_dim: 192
+    predictor_depth: 6
+    num_heads: 6
+  ema:
+    start: 0.996
+    end: 1.0
+
+training:
+  epochs: 100
+  batch_size: 128            # per GPU — effective batch = 128 * num_gpus
+  learning_rate: 0.001
+  start_lr: 0.0001
+  final_lr: 0.0
+  weight_decay: 0.05
+  final_weight_decay: 0.05
+  warmup_epochs: 10
+  optimizer: adamw
+  use_bfloat16: true
+  checkpoint_freq: 10
+  seed: 42
+  deterministic: false
+  grad_clip_norm: 1.0
+  # Distributed settings
+  strategy: ddp
+  activation_checkpointing: false
+  max_retries: 3
+  monitored_barrier_freq: 500
+  # TCD settings
+  tcd_weight: 0.001
+  langevin_diff_steps: 3
+
+tcd:
+  max_explore: 512
+  margin: 0.1
+  energy_shaping_weight: 0.01
+  max_modules: 12
+
+data:
+  dataset: imagenet
+  img_size: 224
+  num_workers: 8
+  data_dir: /workspace/data/imagenet
+
+masking:
+  num_enc_masks: 4
+  num_pred_masks: 1
+  min_keep: 10
+  enc_mask_scale: [0.15, 0.2]
+  pred_mask_scale: [0.15, 0.25]
+  aspect_ratio: [0.75, 1.5]
+
+evaluation:
+  enabled: true
+  eval_freq: 10
+  linear_probe_epochs: 100
+  knn_k: [1, 5, 20]
+
+logging:
+  use_wandb: false
+  wandb_project: tcd-jepa-imagenet
+  log_dir: ./logs/imagenet_small

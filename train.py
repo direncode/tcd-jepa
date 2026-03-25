@@ -51,6 +51,23 @@ def _build_cifar10_transform(img_size: int, train: bool = True) -> T.Compose:
     return T.Compose(transforms)
 
 
+def _build_imagenet_transform(img_size: int, train: bool = True) -> T.Compose:
+    """Build ImageNet transform for train or test."""
+    if train:
+        return T.Compose([
+            T.RandomResizedCrop(img_size, scale=(0.2, 1.0)),
+            T.RandomHorizontalFlip(),
+            T.ToTensor(),
+            T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ])
+    return T.Compose([
+        T.Resize(int(img_size * 256 / 224)),
+        T.CenterCrop(img_size),
+        T.ToTensor(),
+        T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+    ])
+
+
 def build_dataloader(cfg: dict, mask_collator: MaskCollator) -> DataLoader:
     """Build training dataloader from config."""
     data_cfg = cfg.get("data", {})
@@ -74,6 +91,27 @@ def build_dataloader(cfg: dict, mask_collator: MaskCollator) -> DataLoader:
                 return self.ds[idx][0]
 
         dataset = DropLabel(dataset)
+
+    elif dataset_name == "imagenet":
+        data_dir = data_cfg.get("data_dir", "./data/imagenet")
+        train_dir = Path(data_dir) / "train"
+        if not train_dir.exists():
+            raise FileNotFoundError(
+                f"ImageNet train directory not found: {train_dir}\n"
+                "Download ImageNet and extract to: {data_dir}/train/ and {data_dir}/val/"
+            )
+        transform = _build_imagenet_transform(img_size, train=True)
+        full_dataset = torchvision.datasets.ImageFolder(str(train_dir), transform=transform)
+
+        class DropLabel(torch.utils.data.Dataset):
+            def __init__(self, ds):
+                self.ds = ds
+            def __len__(self):
+                return len(self.ds)
+            def __getitem__(self, idx):
+                return self.ds[idx][0]
+
+        dataset = DropLabel(full_dataset)
 
     elif dataset_name == "two_rooms":
         from experiments.two_rooms.environment import TwoRoomsDataset
@@ -110,24 +148,40 @@ def build_eval_dataloaders(
     """
     data_cfg = cfg.get("data", {})
     dataset_name = data_cfg.get("dataset", "cifar10")
+    num_workers = data_cfg.get("num_workers", 4)
 
-    if dataset_name != "cifar10":
+    if dataset_name == "cifar10":
+        train_transform = _build_cifar10_transform(img_size, train=False)
+        test_transform = _build_cifar10_transform(img_size, train=False)
+        train_dataset = torchvision.datasets.CIFAR10(
+            root=data_cfg.get("data_dir", "./data"),
+            train=True, download=False, transform=train_transform,
+        )
+        test_dataset = torchvision.datasets.CIFAR10(
+            root=data_cfg.get("data_dir", "./data"),
+            train=False, download=True, transform=test_transform,
+        )
+    elif dataset_name == "imagenet":
+        data_dir = data_cfg.get("data_dir", "./data/imagenet")
+        train_dir = Path(data_dir) / "train"
+        val_dir = Path(data_dir) / "val"
+        if not train_dir.exists() or not val_dir.exists():
+            logger.warning("ImageNet train/val dirs not found — skipping evaluation")
+            return None
+        eval_transform = _build_imagenet_transform(img_size, train=False)
+        train_dataset = torchvision.datasets.ImageFolder(str(train_dir), transform=eval_transform)
+        test_dataset = torchvision.datasets.ImageFolder(str(val_dir), transform=eval_transform)
+    else:
         return None
 
-    train_transform = _build_cifar10_transform(img_size, train=False)
-    test_transform = _build_cifar10_transform(img_size, train=False)
-
-    train_dataset = torchvision.datasets.CIFAR10(
-        root=data_cfg.get("data_dir", "./data"),
-        train=True, download=False, transform=train_transform,
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=True,
     )
-    test_dataset = torchvision.datasets.CIFAR10(
-        root=data_cfg.get("data_dir", "./data"),
-        train=False, download=True, transform=test_transform,
+    test_loader = DataLoader(
+        test_dataset, batch_size=batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=True,
     )
-
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
     return train_loader, test_loader
 
 
@@ -258,15 +312,17 @@ def main():
         eval_loaders = build_eval_dataloaders(cfg, img_size)
         if eval_loaders is not None:
             eval_train_loader, eval_test_loader = eval_loaders
+            dataset_name = cfg.get("data", {}).get("dataset", "cifar10")
+            num_classes = 1000 if dataset_name == "imagenet" else 10
             eval_runner = EvaluationRunner(
                 encoder=model.context_encoder,
                 train_loader=eval_train_loader,
                 test_loader=eval_test_loader,
                 device=device,
-                num_classes=10,
+                num_classes=num_classes,
                 eval_cfg=eval_cfg,
             )
-            logger.info("Evaluation pipeline enabled (linear probe + k-NN)")
+            logger.info(f"Evaluation pipeline enabled (linear probe + k-NN, {num_classes} classes)")
 
     # Build trainer
     trainer = Trainer(
