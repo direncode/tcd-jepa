@@ -129,11 +129,38 @@ def get_latest_10k_url(cik: str) -> str | None:
     accessions = recent.get("accessionNumber", [])
     primary_docs = recent.get("primaryDocument", [])
 
+    # Strip leading zeros from CIK for the URL path (SEC uses both formats)
+    cik_stripped = cik.lstrip("0") or "0"
+
     for i, form in enumerate(forms):
         if form == "10-K" and i < len(accessions) and i < len(primary_docs):
-            accession = accessions[i].replace("-", "")
+            accession_dashed = accessions[i]  # e.g. "0000320193-24-000123"
+            accession_nodash = accession_dashed.replace("-", "")
             doc = primary_docs[i]
-            return f"{SEC_BASE}/Archives/edgar/data/{cik}/{accession}/{doc}"
+
+            # Try multiple URL formats (SEC uses different conventions)
+            urls_to_try = [
+                f"{SEC_BASE}/Archives/edgar/data/{cik_stripped}/{accession_nodash}/{doc}",
+                f"{SEC_BASE}/Archives/edgar/data/{cik}/{accession_nodash}/{doc}",
+            ]
+
+            for try_url in urls_to_try:
+                test = sec_request(try_url)
+                if test and len(test) > 1000:
+                    return try_url
+
+            # If HTML fails, try the filing index page to find the actual document
+            index_url = f"{SEC_BASE}/Archives/edgar/data/{cik_stripped}/{accession_nodash}/"
+            index_data = sec_request(index_url)
+            if index_data:
+                index_text = index_data.decode("utf-8", errors="ignore")
+                # Look for .htm files in the index
+                import re
+                htm_matches = re.findall(r'href="([^"]+\.htm)"', index_text)
+                for htm in htm_matches:
+                    if "10-k" in htm.lower() or "10k" in htm.lower() or doc.split(".")[0] in htm:
+                        full_url = f"{SEC_BASE}/Archives/edgar/data/{cik_stripped}/{accession_nodash}/{htm}"
+                        return full_url
 
     return None
 

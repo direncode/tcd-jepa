@@ -167,19 +167,22 @@ def main():
         if src < n and tgt < n:
             adjacency[src, tgt] = 0.8
 
-    # Spectral coordinates
-    from scipy.linalg import eigh
-    sym = adjacency + adjacency.T
-    np.fill_diagonal(sym, 0)
-    degree = sym.sum(axis=1)
-    d_inv = np.where(degree > 0, 1.0 / np.sqrt(degree), 0)
-    D = np.diag(d_inv)
-    L = np.eye(n) - D @ sym @ D
+    # Spectral coordinates (sparse for speed on 19.7K nodes)
+    from scipy.sparse import csr_matrix, diags
+    from scipy.sparse.linalg import eigsh
 
+    adj_sparse = csr_matrix(adjacency + adjacency.T)
+    degree = np.array(adj_sparse.sum(axis=1)).flatten()
+    d_inv = np.where(degree > 0, 1.0 / np.sqrt(degree), 0)
+    D = diags(d_inv)
+    L = diags(np.ones(n)) - D @ adj_sparse @ D
+
+    logger.info(f"Computing spectral embedding for {n:,} nodes...")
     try:
-        eigenvalues, eigenvectors = eigh(L, subset_by_index=[1, 2])
-        embed_2d = eigenvectors
-    except Exception:
+        eigenvalues, eigenvectors = eigsh(L, k=3, which="SM", maxiter=500)
+        embed_2d = eigenvectors[:, 1:3]
+    except Exception as e:
+        logger.warning(f"  eigsh failed ({e}), using random layout")
         embed_2d = np.random.RandomState(42).randn(n, 2)
 
     norms_2d = np.linalg.norm(embed_2d, axis=1, keepdims=True)
