@@ -56,6 +56,21 @@ class CausalManifoldDataset(Dataset):
         self.num_entities = fingerprints.shape[0]
         self.sparse_adjacency = sparse_adjacency
 
+        # Precompute COO arrays for fast sparse window extraction
+        self._sparse_coo = None
+        if sparse_adjacency is not None:
+            src_list, tgt_list, val_list = [], [], []
+            for link in sparse_adjacency.all_links():
+                src_list.append(link.source)
+                tgt_list.append(link.target)
+                val_list.append(link.strength)
+            if src_list:
+                self._sparse_coo = (
+                    torch.tensor(src_list, dtype=torch.long),
+                    torch.tensor(tgt_list, dtype=torch.long),
+                    torch.tensor(val_list, dtype=torch.float),
+                )
+
     def __len__(self) -> int:
         return self.num_samples
 
@@ -119,11 +134,16 @@ class CausalManifoldDataset(Dataset):
         else:
             indices = torch.randperm(self.num_entities)[:self.num_tokens]
 
-        # Use sparse to_dense for the windowed subset when available
-        if self.sparse_adjacency is not None:
+        # Build adjacency submatrix for the window
+        if self.sparse_adjacency is not None and self._sparse_coo is not None:
+            # Fast vectorized sparse lookup using precomputed COO tensor
+            adj_window = self._fast_sparse_window(indices)
+        elif self.sparse_adjacency is not None:
             adj_window = self.sparse_adjacency.to_dense(indices.tolist())
-        else:
+        elif self.adjacency.numel() > 0:
             adj_window = self.adjacency[indices][:, indices]
+        else:
+            adj_window = torch.zeros(len(indices), len(indices))
 
         result = {
             "fingerprints": self.fingerprints[indices],
@@ -137,6 +157,36 @@ class CausalManifoldDataset(Dataset):
             result["labels"] = self.entity_labels[indices]
 
         return result
+
+    def _fast_sparse_window(self, indices: torch.Tensor) -> torch.Tensor:
+        """Extract K×K adjacency submatrix using vectorized sparse ops.
+
+        Uses precomputed COO arrays with torch.isin for O(E) filtering
+        instead of O(K*avg_degree) Python loops.
+        """
+        K = len(indices)
+        src_all, tgt_all, val_all = self._sparse_coo
+
+        # Vectorized: find edges where both src and tgt are in the window
+        src_mask = torch.isin(src_all, indices)
+        tgt_mask = torch.isin(tgt_all, indices)
+        both_mask = src_mask & tgt_mask
+
+        if not both_mask.any():
+            return torch.zeros(K, K)
+
+        # Map global indices to local positions
+        # Create lookup: global_idx -> local_pos
+        local_map = torch.full((self.num_entities,), -1, dtype=torch.long)
+        local_map[indices] = torch.arange(K)
+
+        matched_src = local_map[src_all[both_mask]]
+        matched_tgt = local_map[tgt_all[both_mask]]
+        matched_val = val_all[both_mask]
+
+        mat = torch.zeros(K, K)
+        mat[matched_src, matched_tgt] = matched_val
+        return mat
 
 
 class LatentOceanDataset(CausalManifoldDataset):
