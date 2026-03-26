@@ -29,6 +29,10 @@ from tcd_jepa.models.target_encoder import momentum_schedule  # noqa: E402
 from tcd_jepa.training.schedulers import CosineWDSchedule, WarmupCosineSchedule  # noqa: E402
 from tcd_jepa.training.trainer import build_optimizer  # noqa: E402
 
+# Parse data dir from command line or default to semiconductor
+data_dir = sys.argv[1] if len(sys.argv) > 1 else "./data/semiconductor"
+logger.info(f"Data dir: {data_dir}")
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 model = build_manifold_jepa(
@@ -39,7 +43,7 @@ model = build_manifold_jepa(
     use_velocity_encoding=True, sphere_radius=4.5,
 ).to(device)
 
-dataset = LatentOceanDataset("./data/semiconductor", num_tokens=64, num_samples=1000)
+dataset = LatentOceanDataset(data_dir, num_tokens=64, num_samples=1000)
 collator = ManifoldMaskCollator(
     num_tokens=64, context_ratio=(0.3, 0.5), target_ratio=(0.15, 0.3),
     num_context_masks=4, num_target_masks=1, min_keep=4,
@@ -80,7 +84,8 @@ logger.info(f"\n{'=' * 60}")
 logger.info(f"CRYSTALLIZED MODULES: {len(modules)}")
 logger.info(f"{'=' * 60}")
 
-with open("./data/semiconductor/entities.json") as f:
+entities_path = f"{data_dir}/entities.json"
+with open(entities_path) as f:
     entities = json.load(f)
 
 model.eval()
@@ -107,20 +112,20 @@ for mid, mod in modules:
         act = mod(z_flat).norm(dim=-1)
     topk_v, topk_i = act.topk(min(15, len(act)))
     topk_i = topk_i.cpu()
-    names, types, stages = [], {}, {}
+    names, attrs = [], {}
     for gid in idx[topk_i].tolist():
         if gid < len(entities):
             e = entities[gid]
-            names.append(e["name"])
-            t = e.get("type", "?")
-            s = e.get("stage", "?")
-            types[t] = types.get(t, 0) + 1
-            stages[s] = stages.get(s, 0) + 1
-    dom_t = max(types, key=types.get) if types else "?"
-    dom_s = max(stages, key=stages.get) if stages else "?"
+            name = e.get("name", e.get("company", str(gid)))
+            names.append(name)
+            # Collect all string attributes for clustering
+            for key in ["type", "stage", "country", "actor1_type", "company"]:
+                if key in e and e[key]:
+                    attrs[f"{key}={e[key]}"] = attrs.get(f"{key}={e[key]}", 0) + 1
+    dom_attr = max(attrs, key=attrs.get) if attrs else "?"
     print(f"\nModule {mid}:")
-    print(f"  Type: {dom_t} | Stage: {dom_s}")
-    print(f"  Distribution: {types}")
+    print(f"  Dominant: {dom_attr}")
+    print(f"  Attributes: {dict(sorted(attrs.items(), key=lambda x: -x[1])[:5])}")
     print(f"  Entities: {', '.join(names[:8])}")
 
 print("\nANALYSIS COMPLETE")
