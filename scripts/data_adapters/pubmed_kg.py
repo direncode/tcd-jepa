@@ -157,7 +157,8 @@ def main():
     else:
         fingerprints = data["features"]
 
-    # Normalize
+    # Normalize and ensure float32
+    fingerprints = fingerprints.astype(np.float32)
     norms = np.linalg.norm(fingerprints, axis=1, keepdims=True)
     fingerprints = fingerprints / np.clip(norms, 1e-8, None)
 
