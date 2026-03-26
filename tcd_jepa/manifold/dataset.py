@@ -135,8 +135,8 @@ class CausalManifoldDataset(Dataset):
             indices = torch.randperm(self.num_entities)[:self.num_tokens]
 
         # Build adjacency submatrix for the window
-        if self.sparse_adjacency is not None and self._sparse_coo is not None:
-            # Fast vectorized sparse lookup using precomputed COO tensor
+        if self._sparse_coo is not None:
+            # Fast vectorized sparse lookup using COO tensors
             adj_window = self._fast_sparse_window(indices)
         elif self.sparse_adjacency is not None:
             adj_window = self.sparse_adjacency.to_dense(indices.tolist())
@@ -238,30 +238,33 @@ class LatentOceanDataset(CausalManifoldDataset):
             else:
                 adjacency = torch.load(data_path / "adjacency.pt", weights_only=True)
 
-        # Build SparseAdjacency for large-scale graphs
+        # For large-scale graphs: load edges directly as COO tensors
+        # Bypass SparseAdjacency Python objects entirely for speed
         sparse_adj = None
+        direct_coo = None
+
         if (data_path / "edges.pt").exists():
-            edges = torch.load(data_path / "edges.pt", weights_only=True)
-            sparse_adj = SparseAdjacency()
-            for row in edges:
-                src, tgt = int(row[0].item()), int(row[1].item())
-                weight = float(row[2].item()) if row.shape[0] > 2 else 0.8
-                sparse_adj.add_link(src, tgt, weight)
             import logging
-            logging.getLogger("tcd_jepa").info(
-                f"Loaded sparse adjacency: {sparse_adj.num_nodes} nodes, {sparse_adj.num_links} edges"
+            _logger = logging.getLogger("tcd_jepa")
+            edges = torch.load(data_path / "edges.pt", weights_only=True)
+            direct_coo = (
+                edges[:, 0].long(),   # src
+                edges[:, 1].long(),   # tgt
+                edges[:, 2].float() if edges.shape[1] > 2 else torch.full((edges.shape[0],), 0.8),
             )
+            _logger.info(f"Loaded {edges.shape[0]:,} edges as COO tensors (fast path)")
         elif (data_path / "adjacency_sparse.pt").exists():
-            sparse_tensor = torch.load(data_path / "adjacency_sparse.pt", weights_only=True)
-            indices = sparse_tensor.coalesce().indices()
-            values = sparse_tensor.coalesce().values()
-            sparse_adj = SparseAdjacency()
-            for k in range(indices.shape[1]):
-                sparse_adj.add_link(int(indices[0, k]), int(indices[1, k]), float(values[k]))
+            sparse_tensor = torch.load(data_path / "adjacency_sparse.pt", weights_only=True).coalesce()
+            direct_coo = (
+                sparse_tensor.indices()[0],
+                sparse_tensor.indices()[1],
+                sparse_tensor.values(),
+            )
         elif adjacency.numel() > 0 and adjacency.shape[0] > 5000:
-            # Auto-convert dense to sparse for large graphs
-            sparse_adj = SparseAdjacency.from_dense(adjacency)
-            adjacency = torch.zeros(0, 0)  # Free memory
+            rows, cols = torch.where(adjacency.abs() > 1e-6)
+            vals = adjacency[rows, cols]
+            direct_coo = (rows, cols, vals)
+            adjacency = torch.zeros(0, 0)
 
         super().__init__(
             fingerprints=fingerprints,
@@ -274,6 +277,10 @@ class LatentOceanDataset(CausalManifoldDataset):
             window_mode=window_mode,
             sparse_adjacency=sparse_adj,
         )
+
+        # Override COO directly if loaded from edges (skip SparseAdjacency)
+        if direct_coo is not None:
+            self._sparse_coo = direct_coo
 
         self.num_clusters = int(labels.max().item()) + 1 if labels is not None else 0
 
