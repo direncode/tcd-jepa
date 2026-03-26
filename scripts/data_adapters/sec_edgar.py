@@ -42,8 +42,8 @@ logger = logging.getLogger("sec_edgar")
 
 # SEC requires User-Agent header with contact info
 USER_AGENT = "TCD-JEPA-Research research@example.com"
-SEC_BASE = "https://data.sec.gov"
-EFTS_BASE = "https://efts.sec.gov/LATEST/search-index?q=%2210-K%22&dateRange=custom"
+SEC_API_BASE = "https://data.sec.gov"
+SEC_FILING_BASE = "https://www.sec.gov"
 
 # Top companies by market cap — guaranteed to have 10-K filings
 SP500_CIKS = {
@@ -114,7 +114,8 @@ def sec_request(url: str) -> bytes:
 
 def get_latest_10k_url(cik: str) -> str | None:
     """Find the URL of the most recent 10-K filing for a company."""
-    url = f"{SEC_BASE}/submissions/CIK{cik}.json"
+    # API uses data.sec.gov, filings use www.sec.gov
+    url = f"{SEC_API_BASE}/submissions/CIK{cik}.json"
     data = sec_request(url)
     if not data:
         return None
@@ -129,38 +130,35 @@ def get_latest_10k_url(cik: str) -> str | None:
     accessions = recent.get("accessionNumber", [])
     primary_docs = recent.get("primaryDocument", [])
 
-    # Strip leading zeros from CIK for the URL path (SEC uses both formats)
-    cik_stripped = cik.lstrip("0") or "0"
+    # CIK as integer (no leading zeros) for the filing path
+    cik_int = str(int(cik))
 
     for i, form in enumerate(forms):
         if form == "10-K" and i < len(accessions) and i < len(primary_docs):
-            accession_dashed = accessions[i]  # e.g. "0000320193-24-000123"
+            accession_dashed = accessions[i]  # e.g. "0000320193-24-000079"
             accession_nodash = accession_dashed.replace("-", "")
             doc = primary_docs[i]
 
-            # Try multiple URL formats (SEC uses different conventions)
-            urls_to_try = [
-                f"{SEC_BASE}/Archives/edgar/data/{cik_stripped}/{accession_nodash}/{doc}",
-                f"{SEC_BASE}/Archives/edgar/data/{cik}/{accession_nodash}/{doc}",
-            ]
+            # Filing documents are on www.sec.gov, not data.sec.gov
+            filing_url = f"{SEC_FILING_BASE}/Archives/edgar/data/{cik_int}/{accession_nodash}/{doc}"
+            test = sec_request(filing_url)
+            if test and len(test) > 1000:
+                return filing_url
 
-            for try_url in urls_to_try:
-                test = sec_request(try_url)
-                if test and len(test) > 1000:
-                    return try_url
-
-            # If HTML fails, try the filing index page to find the actual document
-            index_url = f"{SEC_BASE}/Archives/edgar/data/{cik_stripped}/{accession_nodash}/"
+            # Try the filing index to find alternate document names
+            index_url = f"{SEC_FILING_BASE}/Archives/edgar/data/{cik_int}/{accession_nodash}/"
             index_data = sec_request(index_url)
             if index_data:
                 index_text = index_data.decode("utf-8", errors="ignore")
-                # Look for .htm files in the index
                 import re
-                htm_matches = re.findall(r'href="([^"]+\.htm)"', index_text)
+                htm_matches = re.findall(r'href="([^"]+\.htm[l]?)"', index_text)
                 for htm in htm_matches:
-                    if "10-k" in htm.lower() or "10k" in htm.lower() or doc.split(".")[0] in htm:
-                        full_url = f"{SEC_BASE}/Archives/edgar/data/{cik_stripped}/{accession_nodash}/{htm}"
-                        return full_url
+                    if "10-k" in htm.lower() or "10k" in htm.lower():
+                        return f"{SEC_FILING_BASE}/Archives/edgar/data/{cik_int}/{accession_nodash}/{htm}"
+                # Just take the first .htm if no 10-K match
+                for htm in htm_matches:
+                    if not htm.startswith("R") and "xml" not in htm.lower():
+                        return f"{SEC_FILING_BASE}/Archives/edgar/data/{cik_int}/{accession_nodash}/{htm}"
 
     return None
 
