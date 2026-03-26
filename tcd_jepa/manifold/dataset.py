@@ -282,6 +282,14 @@ class LatentOceanDataset(CausalManifoldDataset):
         if direct_coo is not None:
             self._sparse_coo = direct_coo
 
+        # Auto-switch to random windowing if no dense adjacency available for geodesic
+        if self.window_mode == "geodesic" and self.adjacency.numel() == 0 and self.sparse_adjacency is None:
+            import logging
+            logging.getLogger("tcd_jepa").info(
+                "No dense adjacency for geodesic windowing — switching to random window mode"
+            )
+            self.window_mode = "random"
+
         self.num_clusters = int(labels.max().item()) + 1 if labels is not None else 0
 
 
