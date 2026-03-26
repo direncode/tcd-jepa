@@ -135,9 +135,13 @@ class CausalManifoldDataset(Dataset):
             indices = torch.randperm(self.num_entities)[:self.num_tokens]
 
         # Build adjacency submatrix for the window
-        if self._sparse_coo is not None:
-            # Fast vectorized sparse lookup using COO tensors
+        if self._sparse_coo is not None and self.num_entities <= 10000:
+            # Vectorized sparse lookup — only feasible for smaller graphs
             adj_window = self._fast_sparse_window(indices)
+        elif self._sparse_coo is not None:
+            # Large graph: skip per-batch adjacency (too slow)
+            # The model still learns from fingerprints + coords + velocity
+            adj_window = torch.zeros(len(indices), len(indices))
         elif self.sparse_adjacency is not None:
             adj_window = self.sparse_adjacency.to_dense(indices.tolist())
         elif self.adjacency.numel() > 0:
