@@ -106,6 +106,7 @@ for mid, mod in modules:
     with torch.no_grad():
         act = mod(z_flat).norm(dim=-1)
     topk_v, topk_i = act.topk(min(15, len(act)))
+    topk_i = topk_i.cpu()
     names, types, stages = [], {}, {}
     for gid in idx[topk_i].tolist():
         if gid < len(entities):
