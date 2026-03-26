@@ -147,13 +147,27 @@ def build_coordinates_sparse(edges: np.ndarray, num_nodes: int, sphere_radius: f
     L = diags(np.ones(num_nodes)) - D @ adj @ D
 
     try:
-        logger.info("  Running eigsh (this may take a few minutes for large graphs)...")
-        eigenvalues, eigenvectors = eigsh(L, k=3, which="SM", maxiter=1000)
-        embed_2d = eigenvectors[:, 1:3]
+        if num_nodes > 500000:
+            # For very large graphs, use randomized SVD (much faster than eigsh)
+            from sklearn.utils.extmath import randomized_svd
+            logger.info(f"  Using randomized SVD for {num_nodes:,} nodes...")
+            # Normalized adjacency instead of Laplacian (faster convergence)
+            A_norm = D @ adj @ D
+            U, S, Vt = randomized_svd(A_norm, n_components=3, random_state=42)
+            embed_2d = U[:, 1:3]
+        else:
+            logger.info(f"  Running eigsh for {num_nodes:,} nodes...")
+            eigenvalues, eigenvectors = eigsh(L, k=3, which="SM", maxiter=1000)
+            embed_2d = eigenvectors[:, 1:3]
     except Exception as e:
-        logger.warning(f"  eigsh failed ({e}), using random projection")
+        logger.warning(f"  Spectral embedding failed ({e}), using degree-based layout")
+        # Fallback: place nodes by degree (high-degree = near poles, low-degree = equator)
         rng = np.random.RandomState(42)
-        embed_2d = rng.randn(num_nodes, 2).astype(np.float32)
+        degree_rank = np.argsort(np.argsort(-degree)).astype(np.float32) / max(num_nodes - 1, 1)
+        embed_2d = np.stack([
+            degree_rank + rng.normal(0, 0.05, num_nodes),
+            rng.uniform(-1, 1, num_nodes),
+        ], axis=1).astype(np.float32)
 
     # Map to S²
     norms = np.linalg.norm(embed_2d, axis=1, keepdims=True)

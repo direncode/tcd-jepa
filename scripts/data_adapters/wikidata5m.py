@@ -195,6 +195,15 @@ def build_relation_labels(
     rel_to_idx = {r: i for i, r in enumerate(relation_list)}
 
     # Count relation types per entity
+    # Cap relation types to top 100 most common for memory efficiency at scale
+    if len(relation_list) > 100:
+        rel_counts_global = {}
+        for h, r, t in triples:
+            rel_counts_global[r] = rel_counts_global.get(r, 0) + 1
+        top_rels = sorted(rel_counts_global, key=lambda r: -rel_counts_global[r])[:100]
+        relation_list = top_rels
+        rel_to_idx = {r: i for i, r in enumerate(relation_list)}
+
     entity_rel_counts = np.zeros((num_nodes, len(relation_list)), dtype=np.int32)
     for h, r, t in triples:
         if h in entity_to_idx and r in rel_to_idx:
@@ -315,11 +324,22 @@ def main():
         L = diags(np.ones(n)) - D @ adj @ D
 
         try:
-            logger.info("  Running eigsh for spectral embedding...")
-            eigenvalues, eigenvectors = eigsh(L, k=3, which="SM", maxiter=1000)
-            embed_2d = eigenvectors[:, 1:3]
-        except Exception:
-            embed_2d = np.random.RandomState(42).randn(n, 2).astype(np.float32)
+            if n > 500000:
+                from sklearn.utils.extmath import randomized_svd
+                logger.info(f"  Using randomized SVD for {n:,} nodes...")
+                A_norm = D @ adj @ D
+                U, S, Vt = randomized_svd(A_norm, n_components=3, random_state=42)
+                embed_2d = U[:, 1:3]
+            else:
+                logger.info(f"  Running eigsh for {n:,} nodes...")
+                eigenvalues, eigenvectors = eigsh(L, k=3, which="SM", maxiter=1000)
+                embed_2d = eigenvectors[:, 1:3]
+        except Exception as e:
+            logger.warning(f"  Spectral embedding failed ({e}), using degree-based layout")
+            degree_arr = np.array(adj.sum(axis=1)).flatten()
+            rng_fb = np.random.RandomState(42)
+            rank = np.argsort(np.argsort(-degree_arr)).astype(np.float32) / max(n - 1, 1)
+            embed_2d = np.stack([rank + rng_fb.normal(0, 0.05, n), rng_fb.uniform(-1, 1, n)], axis=1).astype(np.float32)
 
     # Map to S²
     norms_2d = np.linalg.norm(embed_2d, axis=1, keepdims=True)

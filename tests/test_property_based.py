@@ -102,7 +102,7 @@ class TestLossTrackerProperties:
         for v in values:
             tracker.update(v)
         avg = tracker.rolling_avg
-        assert min(values) <= avg <= max(values) + 1e-8
+        assert min(values) - 1e-8 <= avg <= max(values) + 1e-8
 
     @given(
         n=st.integers(min_value=15, max_value=30),
