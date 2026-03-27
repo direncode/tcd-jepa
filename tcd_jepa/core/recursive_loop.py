@@ -231,21 +231,26 @@ class RecursiveLoop:
         # System 3: Crystallize (less frequent, needs enough trajectories)
         if (self._iteration % self.crystallize_every == 0
                 and self.explorer.num_trajectories >= self.min_trajectories):
-            point_cloud = self.explorer.get_point_cloud(last_n=5)
-            crystal_result = self.crystallizer.crystallize(point_cloud, epoch)
-            result["crystallization"] = {
-                "new_modules": crystal_result["new_modules"],
-                "pruned_modules": crystal_result["pruned_modules"],
-                "total_persistence": crystal_result["total_persistence"],
-                "num_active_modules": self.crystallizer.num_modules,
-            }
-            # Expose new module objects so the caller can register them with the model
-            result["new_module_objects"] = [
-                (mid, self.crystallizer.registry.get_module(mid), feat)
-                for mid, feat in crystal_result["new_modules"]
-                if self.crystallizer.registry.get_module(mid) is not None
-            ]
-            result["crystallized"] = True
+            try:
+                point_cloud = self.explorer.get_point_cloud(last_n=5)
+            except ValueError:
+                point_cloud = None
+
+            if point_cloud is not None and point_cloud.shape[0] >= 2:
+                crystal_result = self.crystallizer.crystallize(point_cloud, epoch)
+                result["crystallization"] = {
+                    "new_modules": crystal_result["new_modules"],
+                    "pruned_modules": crystal_result["pruned_modules"],
+                    "total_persistence": crystal_result["total_persistence"],
+                    "num_active_modules": self.crystallizer.num_modules,
+                }
+                # Expose new module objects — filter out None modules
+                result["new_module_objects"] = [
+                    (mid, self.crystallizer.registry.get_module(mid), feat)
+                    for mid, feat in crystal_result["new_modules"]
+                    if self.crystallizer.registry.get_module(mid) is not None
+                ]
+                result["crystallized"] = True
 
         # Convergence monitoring
         if z_context.dim() == 3:

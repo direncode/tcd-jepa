@@ -5,12 +5,15 @@ following the standard JEPA paradigm from I-JEPA.
 """
 
 import copy
+import logging
 from typing import Iterator, Optional
 
 import torch
 import torch.nn as nn
 
 from tcd_jepa.models.vision_transformer import VisionTransformer
+
+logger = logging.getLogger("tcd_jepa")
 
 
 class TargetEncoder(nn.Module):
@@ -42,6 +45,13 @@ class TargetEncoder(nn.Module):
 
         for param_q, param_k in zip(context_encoder.parameters(), self.encoder.parameters()):
             param_k.data.mul_(momentum).add_((1.0 - momentum) * param_q.detach().data)
+
+        # Emergency NaN recovery: if EMA produced NaN, restore from context encoder
+        for param_q, param_k in zip(context_encoder.parameters(), self.encoder.parameters()):
+            if torch.isnan(param_k.data).any():
+                logger.error("NaN detected in target encoder after EMA update — restoring from context encoder")
+                param_k.data.copy_(param_q.detach().data)
+                break
 
     def forward(
         self, x: torch.Tensor, masks: Optional[list[torch.Tensor]] = None

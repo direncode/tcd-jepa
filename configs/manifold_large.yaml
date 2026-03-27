@@ -1,0 +1,79 @@
+# Large-scale Latent Ocean TCD-JEPA configuration
+# For datasets with 10K-1M+ entities using sparse adjacency
+#
+# Usage:
+#   # Convert ogbn-arxiv (111K papers, 1.2M citations)
+#   python scripts/data_adapters/ogbn_arxiv.py --output ./data/arxiv
+#
+#   # Baseline
+#   python train_manifold.py --config configs/manifold_large.yaml --eval \
+#       data.dataset=latent_ocean data.data_dir=./data/arxiv \
+#       tcd.use_dynamic_predictor=false
+#
+#   # TCD
+#   python train_manifold.py --config configs/manifold_large.yaml --tcd --eval \
+#       data.dataset=latent_ocean data.data_dir=./data/arxiv
+
+model:
+  encoder:
+    fingerprint_dim: 384
+    num_tokens: 64
+    coord_dim: 3
+    embed_dim: 384              # larger model for bigger dataset
+    depth: 8
+    num_heads: 6
+    mlp_ratio: 4.0
+    use_causal_encoding: true
+    use_velocity_encoding: true
+    sphere_radius: 4.5
+  predictor:
+    predictor_embed_dim: 192
+    predictor_depth: 4
+    num_heads: 6
+  ema:
+    start: 0.996
+    end: 1.0
+
+training:
+  epochs: 50
+  batch_size: 64
+  learning_rate: 0.001
+  start_lr: 0.0001
+  final_lr: 0.0
+  weight_decay: 0.05
+  final_weight_decay: 0.05
+  warmup_epochs: 5
+  optimizer: adamw
+  checkpoint_freq: 10
+  seed: 42
+  deterministic: false          # too slow at this scale
+  grad_clip_norm: 1.0
+
+data:
+  dataset: latent_ocean
+  data_dir: ./data/arxiv
+  num_tokens: 64
+  num_samples: 5000             # more windows per epoch for 111K entities
+  fingerprint_dim: 384
+
+masking:
+  context_ratio: [0.3, 0.5]
+  target_ratio: [0.15, 0.3]
+  num_context_masks: 4
+  num_target_masks: 1
+  min_keep: 4
+  use_geodesic: true
+  sphere_radius: 4.5
+
+tcd:
+  use_dynamic_predictor: true
+  explore_every: 3
+  crystallize_every: 6
+  langevin_steps: 20
+  langevin_step_size: 0.01
+  persistence_threshold: 0.2
+  max_modules: 16
+
+logging:
+  use_wandb: false
+  log_dir: ./logs/manifold_large

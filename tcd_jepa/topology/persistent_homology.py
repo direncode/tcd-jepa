@@ -8,10 +8,13 @@ Computes Vietoris-Rips complexes at multiple scales, tracking:
 Uses giotto-tda as primary backend, falls back to ripser.
 """
 
+import logging
 from typing import Optional
 
 import numpy as np
 import torch
+
+logger = logging.getLogger("tcd_jepa")
 
 
 def _get_backend():
@@ -68,9 +71,10 @@ class PersistentHomologyComputer:
         """
         points = point_cloud.detach().cpu().numpy()
 
-        # Subsample for computational feasibility
+        # Subsample for computational feasibility (seeded for reproducibility)
         if points.shape[0] > max_points:
-            indices = np.random.choice(points.shape[0], max_points, replace=False)
+            rng = np.random.RandomState(42)
+            indices = rng.choice(points.shape[0], max_points, replace=False)
             points = points[indices]
 
         if self._backend == "giotto":
@@ -78,6 +82,10 @@ class PersistentHomologyComputer:
         elif self._backend == "ripser":
             return self._compute_ripser(points)
         else:
+            logger.warning(
+                "No PH backend (giotto-tda/ripser) installed — using scipy fallback "
+                "(only H0 via single-linkage). Install giotto-tda or ripser for full PH."
+            )
             return self._compute_fallback(points)
 
     def _compute_giotto(self, points: np.ndarray) -> dict[str, np.ndarray]:

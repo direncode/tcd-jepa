@@ -56,6 +56,21 @@ class CausalManifoldDataset(Dataset):
         self.num_entities = fingerprints.shape[0]
         self.sparse_adjacency = sparse_adjacency
 
+        # Precompute COO arrays for fast sparse window extraction
+        self._sparse_coo = None
+        if sparse_adjacency is not None:
+            src_list, tgt_list, val_list = [], [], []
+            for link in sparse_adjacency.all_links():
+                src_list.append(link.source)
+                tgt_list.append(link.target)
+                val_list.append(link.strength)
+            if src_list:
+                self._sparse_coo = (
+                    torch.tensor(src_list, dtype=torch.long),
+                    torch.tensor(tgt_list, dtype=torch.long),
+                    torch.tensor(val_list, dtype=torch.float),
+                )
+
     def __len__(self) -> int:
         return self.num_samples
 
@@ -119,11 +134,20 @@ class CausalManifoldDataset(Dataset):
         else:
             indices = torch.randperm(self.num_entities)[:self.num_tokens]
 
-        # Use sparse to_dense for the windowed subset when available
-        if self.sparse_adjacency is not None:
+        # Build adjacency submatrix for the window
+        if self._sparse_coo is not None and self.num_entities <= 10000:
+            # Vectorized sparse lookup — only feasible for smaller graphs
+            adj_window = self._fast_sparse_window(indices)
+        elif self._sparse_coo is not None:
+            # Large graph: skip per-batch adjacency (too slow)
+            # The model still learns from fingerprints + coords + velocity
+            adj_window = torch.zeros(len(indices), len(indices))
+        elif self.sparse_adjacency is not None:
             adj_window = self.sparse_adjacency.to_dense(indices.tolist())
-        else:
+        elif self.adjacency.numel() > 0:
             adj_window = self.adjacency[indices][:, indices]
+        else:
+            adj_window = torch.zeros(len(indices), len(indices))
 
         result = {
             "fingerprints": self.fingerprints[indices],
@@ -138,6 +162,36 @@ class CausalManifoldDataset(Dataset):
 
         return result
 
+    def _fast_sparse_window(self, indices: torch.Tensor) -> torch.Tensor:
+        """Extract K×K adjacency submatrix using vectorized sparse ops.
+
+        Uses precomputed COO arrays with torch.isin for O(E) filtering
+        instead of O(K*avg_degree) Python loops.
+        """
+        K = len(indices)
+        src_all, tgt_all, val_all = self._sparse_coo
+
+        # Vectorized: find edges where both src and tgt are in the window
+        src_mask = torch.isin(src_all, indices)
+        tgt_mask = torch.isin(tgt_all, indices)
+        both_mask = src_mask & tgt_mask
+
+        if not both_mask.any():
+            return torch.zeros(K, K)
+
+        # Map global indices to local positions
+        # Create lookup: global_idx -> local_pos
+        local_map = torch.full((self.num_entities,), -1, dtype=torch.long)
+        local_map[indices] = torch.arange(K)
+
+        matched_src = local_map[src_all[both_mask]]
+        matched_tgt = local_map[tgt_all[both_mask]]
+        matched_val = val_all[both_mask]
+
+        mat = torch.zeros(K, K)
+        mat[matched_src, matched_tgt] = matched_val
+        return mat
+
 
 class LatentOceanDataset(CausalManifoldDataset):
     """Loads entity data exported from Latent Ocean's DuckDB.
@@ -148,6 +202,10 @@ class LatentOceanDataset(CausalManifoldDataset):
         velocity.pt      — [num_entities, 3]    (tangent-space velocities)
         adjacency.pt     — [num_entities, num_entities]  (weighted directed links)
         labels.pt        — [num_entities]        (entity_type indices, optional)
+
+    For large-scale graphs (>10K entities), use sparse format:
+        adjacency_sparse.pt — sparse COO tensor (saves O(N²) → O(E) memory)
+        OR edges.pt — [E, 3] tensor of (source, target, weight) triples
 
     Or .npz format:
         latent_ocean_export.npz with keys: fingerprints, coords, velocity, adjacency, labels
@@ -174,8 +232,43 @@ class LatentOceanDataset(CausalManifoldDataset):
             fingerprints = torch.load(data_path / "fingerprints.pt", weights_only=True)
             coords = torch.load(data_path / "coords.pt", weights_only=True)
             velocity = torch.load(data_path / "velocity.pt", weights_only=True) if (data_path / "velocity.pt").exists() else torch.zeros_like(coords)
-            adjacency = torch.load(data_path / "adjacency.pt", weights_only=True)
             labels = torch.load(data_path / "labels.pt", weights_only=True) if (data_path / "labels.pt").exists() else None
+
+            # Load adjacency — prefer sparse for large graphs
+            if (data_path / "edges.pt").exists():
+                adjacency = torch.zeros(0, 0)  # Placeholder — use sparse
+            elif (data_path / "adjacency_sparse.pt").exists():
+                adjacency = torch.zeros(0, 0)  # Placeholder — use sparse
+            else:
+                adjacency = torch.load(data_path / "adjacency.pt", weights_only=True)
+
+        # For large-scale graphs: load edges directly as COO tensors
+        # Bypass SparseAdjacency Python objects entirely for speed
+        sparse_adj = None
+        direct_coo = None
+
+        if (data_path / "edges.pt").exists():
+            import logging
+            _logger = logging.getLogger("tcd_jepa")
+            edges = torch.load(data_path / "edges.pt", weights_only=True)
+            direct_coo = (
+                edges[:, 0].long(),   # src
+                edges[:, 1].long(),   # tgt
+                edges[:, 2].float() if edges.shape[1] > 2 else torch.full((edges.shape[0],), 0.8),
+            )
+            _logger.info(f"Loaded {edges.shape[0]:,} edges as COO tensors (fast path)")
+        elif (data_path / "adjacency_sparse.pt").exists():
+            sparse_tensor = torch.load(data_path / "adjacency_sparse.pt", weights_only=True).coalesce()
+            direct_coo = (
+                sparse_tensor.indices()[0],
+                sparse_tensor.indices()[1],
+                sparse_tensor.values(),
+            )
+        elif adjacency.numel() > 0 and adjacency.shape[0] > 5000:
+            rows, cols = torch.where(adjacency.abs() > 1e-6)
+            vals = adjacency[rows, cols]
+            direct_coo = (rows, cols, vals)
+            adjacency = torch.zeros(0, 0)
 
         super().__init__(
             fingerprints=fingerprints,
@@ -186,7 +279,20 @@ class LatentOceanDataset(CausalManifoldDataset):
             num_tokens=num_tokens,
             num_samples=num_samples,
             window_mode=window_mode,
+            sparse_adjacency=sparse_adj,
         )
+
+        # Override COO directly if loaded from edges (skip SparseAdjacency)
+        if direct_coo is not None:
+            self._sparse_coo = direct_coo
+
+        # Auto-switch to random windowing if no dense adjacency available for geodesic
+        if self.window_mode == "geodesic" and self.adjacency.numel() == 0 and self.sparse_adjacency is None:
+            import logging
+            logging.getLogger("tcd_jepa").info(
+                "No dense adjacency for geodesic windowing — switching to random window mode"
+            )
+            self.window_mode = "random"
 
         self.num_clusters = int(labels.max().item()) + 1 if labels is not None else 0
 

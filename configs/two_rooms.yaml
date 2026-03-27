@@ -31,6 +31,8 @@ training:
   use_bfloat16: false
   checkpoint_freq: 10
   seed: 42
+  deterministic: true
+  grad_clip_norm: 1.0
 
 data:
   dataset: two_rooms
@@ -45,6 +47,9 @@ masking:
   enc_mask_scale: [0.5, 0.8]
   pred_mask_scale: [0.3, 0.6]
   aspect_ratio: [0.75, 1.5]
+
+evaluation:
+  enabled: false
 
 logging:
   use_wandb: false

@@ -1,6 +1,20 @@
-# Latent Ocean TCD-JEPA configuration
+# Latent Ocean TCD-JEPA — Production Demo Configuration
 # Entities on S² (radius 4.5) with 384D sentence-transformer fingerprints,
 # directed causal links, and tangent-space velocities.
+#
+# Usage:
+#   # Baseline (no TCD)
+#   python train_manifold.py --config configs/manifold.yaml --eval
+#
+#   # TCD-JEPA (topological crystallization)
+#   python train_manifold.py --config configs/manifold.yaml --tcd --eval
+#
+# The --eval flag runs the full Latent Ocean evaluation suite:
+#   - Linear probe + k-NN (representation quality)
+#   - Causal link prediction (graph structure preservation)
+#   - Manifold neighborhood preservation (geometric fidelity)
+#   - Latent Ocean KPIs: Clarity, Drift, Opportunity, Risk
+#   - TCD topology: H0 attractors, H1 cycles, H2 boundaries
 
 model:
   encoder:
@@ -23,7 +37,7 @@ model:
     end: 1.0
 
 training:
-  epochs: 50
+  epochs: 100               # increased from 50 — let modules learn
   batch_size: 32
   learning_rate: 0.001
   start_lr: 0.0001
@@ -34,18 +48,20 @@ training:
   optimizer: adamw
   checkpoint_freq: 10
   seed: 42
+  deterministic: true
+  grad_clip_norm: 1.0
 
 data:
   dataset: synthetic_manifold   # or "latent_ocean" with data_dir
   # data_dir: ./data/latent_ocean  # for real Latent Ocean exports
-  num_entities: 256
-  num_clusters: 6
+  num_entities: 512             # increased from 256 — richer topology
+  num_clusters: 8               # increased from 6 — more structure to discover
   num_tokens: 64
   fingerprint_dim: 384
   causal_link_prob: 0.15
   cross_cluster_prob: 0.03
   sphere_radius: 4.5
-  num_samples: 500
+  num_samples: 1000             # increased from 500
 
 masking:
   context_ratio: [0.3, 0.5]
@@ -58,12 +74,12 @@ masking:
 
 tcd:
   use_dynamic_predictor: true
-  explore_every: 5
-  crystallize_every: 10
-  langevin_steps: 50
+  explore_every: 3              # more frequent exploration
+  crystallize_every: 6          # crystallize after 2 exploration cycles
+  langevin_steps: 30            # reduced from 50 — faster iteration
   langevin_step_size: 0.01
-  persistence_threshold: 0.3
-  max_modules: 10
+  persistence_threshold: 0.2    # lower threshold — catch subtler features
+  max_modules: 16               # room for more modules with 8 clusters
 
 logging:
   use_wandb: false

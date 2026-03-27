@@ -1,5 +1,11 @@
 # Ablation study config — uses small scale as base
 # Override specific settings via CLI for different ablation experiments
+#
+# Usage:
+#   python scripts/run_ablation.py --base-config configs/ablation.yaml
+#   python scripts/run_ablation.py --base-config configs/ablation.yaml --ablations tcd,depth --seeds 3
+#   python scripts/run_ablation.py --base-config configs/ablation.yaml --dry-run --list
+
 model:
   encoder:
     img_size: 32
@@ -30,6 +36,13 @@ training:
   use_bfloat16: false
   checkpoint_freq: 10
   seed: 42
+  deterministic: true
+  grad_clip_norm: 1.0
+
+tcd:
+  max_modules: 8
+  margin: 1.0
+  energy_shaping_weight: 0.1
 
 data:
   dataset: cifar10
@@ -45,7 +58,13 @@ masking:
   pred_mask_scale: [0.2, 0.4]
   aspect_ratio: [0.75, 1.5]
 
+evaluation:
+  enabled: true
+  eval_freq: 10
+  linear_probe_epochs: 50
+  knn_k: [1, 5, 20]
+
 logging:
   use_wandb: false
   wandb_project: tcd-jepa-ablation
-  log_dir: ./logs
+  log_dir: ./logs/ablation

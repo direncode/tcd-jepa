@@ -14,6 +14,8 @@ Latent Ocean KPIs (mapped from TCD topology):
 """
 
 
+import logging
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -409,9 +411,25 @@ def run_full_manifold_evaluation(
     results.update(knn)
 
     # Causal link prediction
-    if hasattr(dataset, "adjacency"):
+    if hasattr(dataset, "adjacency") and dataset.adjacency.numel() > 0:
         clp = causal_link_prediction(features, dataset.adjacency, indices, dataset.num_entities)
         results.update(clp)
+    elif hasattr(dataset, "_sparse_coo") and dataset._sparse_coo is not None:
+        # Build adjacency for evaluated subset from COO edges
+        try:
+            src_all, tgt_all, val_all = dataset._sparse_coo
+            valid_entities = indices.unique()
+            n_eval = int(valid_entities.max().item()) + 1
+            local_adj = torch.zeros(n_eval, n_eval)
+            mask_src = src_all < n_eval
+            mask_tgt = tgt_all < n_eval
+            mask_both = mask_src & mask_tgt
+            if mask_both.any():
+                local_adj[src_all[mask_both], tgt_all[mask_both]] = val_all[mask_both]
+            clp = causal_link_prediction(features, local_adj, indices, n_eval)
+            results.update(clp)
+        except Exception as e:
+            logging.getLogger("tcd_jepa").warning(f"Causal link prediction skipped: {e}")
 
     # Manifold neighborhood preservation
     if hasattr(dataset, "coords"):

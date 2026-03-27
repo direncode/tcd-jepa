@@ -1,0 +1,54 @@
+# Weights & Biases sweep configuration for TCD-JEPA hyperparameter search
+#
+# Usage:
+#   wandb sweep configs/sweep.yaml
+#   wandb agent <SWEEP_ID>
+#
+# Or via the sweep runner:
+#   python scripts/run_sweep.py --config configs/sweep.yaml --count 50
+
+program: train.py
+method: bayes
+metric:
+  name: eval/linear_probe_test_acc
+  goal: maximize
+
+parameters:
+  training.learning_rate:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.01
+  training.weight_decay:
+    distribution: log_uniform_values
+    min: 0.01
+    max: 0.1
+  training.warmup_epochs:
+    values: [3, 5, 10, 15]
+  training.batch_size:
+    values: [32, 64, 128, 256]
+  model.encoder.embed_dim:
+    values: [192, 384]
+  model.encoder.depth:
+    values: [6, 12]
+  model.encoder.num_heads:
+    values: [3, 6]
+  model.predictor.predictor_embed_dim:
+    values: [96, 192]
+  model.predictor.predictor_depth:
+    values: [4, 6]
+  model.ema.start:
+    distribution: uniform
+    min: 0.99
+    max: 0.999
+  masking.enc_mask_scale:
+    values: [[0.1, 0.15], [0.15, 0.2], [0.2, 0.3]]
+  masking.pred_mask_scale:
+    values: [[0.15, 0.3], [0.2, 0.4], [0.3, 0.5]]
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - --config
+  - configs/small_scale.yaml
+  - ${args_no_hyphens}

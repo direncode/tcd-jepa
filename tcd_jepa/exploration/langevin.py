@@ -5,9 +5,12 @@ z_{t+1} = z_t - eta * grad_z E(z_t) + sqrt(2*eta/beta) * epsilon_t
 Temperature beta is biased toward blank space regions (lower beta = more exploration).
 """
 
+import logging
 from typing import Optional
 
 import torch
+
+logger = logging.getLogger("tcd_jepa")
 
 
 class LangevinSampler:
@@ -61,7 +64,27 @@ class LangevinSampler:
             energy = energy_fn(z_var)
             if energy.dim() > 0:
                 energy = energy.sum()
-            grad = torch.autograd.grad(energy, z_var)[0]
+
+            # Guard: check energy is finite before computing gradients
+            if not torch.isfinite(energy):
+                logger.warning("Non-finite energy detected in Langevin gradient — returning zero gradient")
+                return torch.zeros_like(z)
+
+            try:
+                grad_tuple = torch.autograd.grad(energy, z_var, allow_unused=True)
+            except RuntimeError:
+                logger.warning("Energy function is not differentiable — returning zero gradient")
+                return torch.zeros_like(z)
+
+            if grad_tuple[0] is None:
+                logger.warning("Energy function returned no gradient — returning zero gradient")
+                return torch.zeros_like(z)
+            grad = grad_tuple[0]
+
+        # Guard: check for NaN gradients
+        if torch.isnan(grad).any():
+            logger.warning("NaN gradient in Langevin dynamics — returning zero gradient")
+            return torch.zeros_like(z)
 
         # Clip gradients for stability
         grad_norm = grad.norm(dim=-1, keepdim=True).clamp(min=1e-8)
@@ -95,7 +118,7 @@ class LangevinSampler:
 
         beta = beta.clamp(min=self.min_temperature)
 
-        noise_scale = torch.sqrt(2.0 * self.step_size / beta)
+        noise_scale = torch.sqrt(2.0 * self.step_size / beta).clamp(max=10.0)
         noise = self._randn_like(z) * noise_scale
 
         z_new = z - self.step_size * grad + noise
