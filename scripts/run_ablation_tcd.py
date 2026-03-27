@@ -99,6 +99,7 @@ def run_condition(name, dataset, epochs, use_dynamic=False, use_tcd=False, use_r
                 centroid = torch.randn(192).numpy()
                 persistence = 1.0
                 dimension = i % 3
+                dim = i % 3
                 birth = 0.0
                 death = 1.0
 
