@@ -6,7 +6,7 @@ and converts it into Latent Ocean manifold format for TCD-JEPA training at scale
 
 - Entities = academic papers (111,059)
 - Fingerprints = 128D Word2Vec embeddings (projected to 384D)
-- Coordinates = projected onto S² via spectral embedding of the citation graph
+- Coordinates = projected onto S² via degree-based layout
 - Causal links = directed citation edges (paper A cites paper B)
 - Entity types = 40 arXiv subject areas
 - Velocities = temporal signal from publication year
@@ -16,8 +16,6 @@ Requirements:
 
 Usage:
     python scripts/data_adapters/ogbn_arxiv.py --output ./data/arxiv
-    python train_manifold.py --config configs/manifold_large.yaml --tcd --eval \\
-        data.dataset=latent_ocean data.data_dir=./data/arxiv
 
 Source: https://ogb.stanford.edu/docs/nodeprop/#ogbn-arxiv
 """
@@ -53,20 +51,19 @@ def load_ogbn_arxiv() -> dict:
     logger.info(f"  Classes: {labels.max().item() + 1}")
 
     return {
-        "node_feat": graph["node_feat"],  # [N, 128] Word2Vec
-        "edge_index": graph["edge_index"],  # [2, E]
-        "labels": labels.flatten(),  # [N]
+        "node_feat": graph["node_feat"],
+        "edge_index": graph["edge_index"],
+        "labels": labels.flatten(),
         "num_nodes": graph["num_nodes"],
     }
 
 
 def build_fingerprints(node_feat: np.ndarray, target_dim: int = 384) -> np.ndarray:
-    """Project 128D Word2Vec features to 384D via random projection + padding."""
+    """Project 128D Word2Vec features to 384D."""
     n, d = node_feat.shape
     rng = np.random.RandomState(42)
 
     if d < target_dim:
-        # Random projection to fill remaining dims
         projection = rng.randn(d, target_dim - d).astype(np.float32) * 0.1
         projected = node_feat @ projection
         fingerprints = np.concatenate([node_feat, projected], axis=1)
@@ -74,7 +71,6 @@ def build_fingerprints(node_feat: np.ndarray, target_dim: int = 384) -> np.ndarr
         projection = rng.randn(d, target_dim).astype(np.float32) / np.sqrt(d)
         fingerprints = node_feat @ projection
 
-    # L2 normalize
     norms = np.linalg.norm(fingerprints, axis=1, keepdims=True)
     fingerprints = fingerprints / np.clip(norms, 1e-8, None)
 
@@ -85,52 +81,21 @@ def build_fingerprints(node_feat: np.ndarray, target_dim: int = 384) -> np.ndarr
 def build_coordinates(
     edge_index: np.ndarray, n: int, sphere_radius: float = 4.5
 ) -> np.ndarray:
-    """Project papers onto S² using approximate spectral embedding.
-
-    For 111K nodes, exact spectral embedding is too slow. We use
-    randomized SVD on the normalized adjacency for speed.
-    """
-    logger.info("Computing spectral embedding for S² coordinates...")
-
+    """Project papers onto S² using fast degree-based layout."""
     from scipy.sparse import csr_matrix
 
-    # Build sparse symmetric adjacency
+    logger.info(f"Computing fast degree-based S² layout for {n:,} nodes...")
+
     rows = np.concatenate([edge_index[0], edge_index[1]])
     cols = np.concatenate([edge_index[1], edge_index[0]])
     data = np.ones(len(rows), dtype=np.float32)
     adj = csr_matrix((data, (rows, cols)), shape=(n, n))
-
-    # Normalized adjacency: D^{-1/2} A D^{-1/2}
     degree = np.array(adj.sum(axis=1)).flatten()
-    degree_inv_sqrt = np.where(degree > 0, 1.0 / np.sqrt(degree), 0)
 
-    # Randomized SVD for top eigenvectors (fast for large sparse matrices)
-    from scipy.sparse import diags
-    from scipy.sparse.linalg import eigsh
-
-    D_inv_sqrt = diags(degree_inv_sqrt)
-    L_norm = diags(np.ones(n)) - D_inv_sqrt @ adj @ D_inv_sqrt
-
-    logger.info("  Running eigsh for 3 smallest eigenvectors...")
-    try:
-        eigenvalues, eigenvectors = eigsh(L_norm, k=3, which="SM", maxiter=500)
-        embed_2d = eigenvectors[:, 1:3]  # Skip trivial first eigenvector
-    except Exception as e:
-        logger.warning(f"  eigsh failed ({e}), using random projection")
-        rng = np.random.RandomState(42)
-        embed_2d = rng.randn(n, 2).astype(np.float32)
-
-    # Map to S²
-    norms = np.linalg.norm(embed_2d, axis=1, keepdims=True)
-    embed_2d = embed_2d / np.clip(norms, 1e-8, None)
-
-    theta = np.arccos(np.clip(embed_2d[:, 0], -1, 1))
-    phi = np.arctan2(embed_2d[:, 1], embed_2d[:, 0]) + np.pi
-
-    # Add small jitter
     rng = np.random.RandomState(42)
-    theta += rng.normal(0, 0.02, n)
-    phi += rng.normal(0, 0.02, n)
+    rank = np.argsort(np.argsort(-degree)).astype(np.float32) / max(n - 1, 1)
+    theta = rank * np.pi + rng.normal(0, 0.03, n)
+    phi = rng.uniform(0, 2 * np.pi, n)
     theta = np.clip(theta, 0.01, np.pi - 0.01)
 
     x = sphere_radius * np.sin(theta) * np.cos(phi)
@@ -148,7 +113,7 @@ def build_edges_tensor(edge_index: np.ndarray) -> torch.Tensor:
     edges = torch.zeros(E, 3)
     edges[:, 0] = torch.from_numpy(edge_index[0])
     edges[:, 1] = torch.from_numpy(edge_index[1])
-    edges[:, 2] = 0.8  # Uniform citation weight
+    edges[:, 2] = 0.8
     logger.info(f"Edges tensor: {edges.shape}")
     return edges
 
@@ -174,25 +139,21 @@ def main():
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load dataset
     data = load_ogbn_arxiv()
     n = data["num_nodes"]
 
-    # Build all tensors
     fingerprints = build_fingerprints(data["node_feat"], target_dim=args.fingerprint_dim)
     coords = build_coordinates(data["edge_index"], n, sphere_radius=args.sphere_radius)
     velocity = build_velocities(n, coords)
     edges = build_edges_tensor(data["edge_index"])
     labels = data["labels"]
 
-    # Save in Latent Ocean format (sparse for adjacency)
     torch.save(torch.from_numpy(fingerprints), output_dir / "fingerprints.pt")
     torch.save(torch.from_numpy(coords), output_dir / "coords.pt")
     torch.save(torch.from_numpy(velocity), output_dir / "velocity.pt")
-    torch.save(edges, output_dir / "edges.pt")  # Sparse edge format
+    torch.save(edges, output_dir / "edges.pt")
     torch.save(torch.from_numpy(labels.astype(np.int64)), output_dir / "labels.pt")
 
-    # Save metadata
     import json
     metadata = {
         "source": "ogbn-arxiv",
@@ -213,8 +174,6 @@ def main():
     logger.info(f"  edges.pt:       [{edges.shape[0]:,}, 3] (sparse)")
     logger.info(f"  labels.pt:      [{n:,}] ({int(labels.max()) + 1} classes)")
     logger.info(f"\nTotal memory: ~{(n * args.fingerprint_dim * 4 + n * 3 * 4 * 2 + edges.shape[0] * 3 * 4) / 1e6:.0f} MB")
-    logger.info(f"\nReady for: python train_manifold.py --config configs/manifold_large.yaml --tcd --eval "
-                f"data.dataset=latent_ocean data.data_dir={output_dir}")
 
 
 if __name__ == "__main__":

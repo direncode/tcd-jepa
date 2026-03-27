@@ -191,52 +191,24 @@ def main():
     fingerprints = build_domain_fingerprints(hosts, args.fingerprint_dim)
     logger.info(f"Fingerprints: {fingerprints.shape}")
 
-    # Coordinates via randomized SVD for large graphs
-    logger.info("Computing spectral embedding...")
+    # Fast degree-based S² coordinates
     edges_np = np.array(edge_list, dtype=np.int64) if edge_list else np.zeros((0, 2), dtype=np.int64)
+    logger.info(f"Computing fast degree-based S² layout for {n:,} nodes...")
 
-    from scipy.sparse import csr_matrix
     if len(edges_np) > 0:
-        rows = np.concatenate([edges_np[:, 0], edges_np[:, 1]])
-        cols = np.concatenate([edges_np[:, 1], edges_np[:, 0]])
-        data = np.ones(len(rows), dtype=np.float32)
-        adj_sparse = csr_matrix((data, (rows, cols)), shape=(n, n))
-
-        try:
-            if n > 500000:
-                from scipy.sparse import diags
-                from sklearn.utils.extmath import randomized_svd
-                degree = np.array(adj_sparse.sum(axis=1)).flatten()
-                d_inv = np.where(degree > 0, 1.0 / np.sqrt(degree), 0)
-                D = diags(d_inv)
-                A_norm = D @ adj_sparse @ D
-                logger.info(f"  Randomized SVD on {n:,} nodes...")
-                U, S, Vt = randomized_svd(A_norm, n_components=3, random_state=42)
-                embed_2d = U[:, 1:3]
-            else:
-                from scipy.sparse import diags
-                from scipy.sparse.linalg import eigsh
-                degree = np.array(adj_sparse.sum(axis=1)).flatten()
-                d_inv = np.where(degree > 0, 1.0 / np.sqrt(degree), 0)
-                D = diags(d_inv)
-                L = diags(np.ones(n)) - D @ adj_sparse @ D
-                eigenvalues, eigenvectors = eigsh(L, k=3, which="SM", maxiter=1000)
-                embed_2d = eigenvectors[:, 1:3]
-        except Exception as e:
-            logger.warning(f"  Spectral failed ({e}), using degree layout")
-            degree = np.array(adj_sparse.sum(axis=1)).flatten()
-            rng = np.random.RandomState(42)
-            rank = np.argsort(np.argsort(-degree)).astype(np.float32) / max(n - 1, 1)
-            embed_2d = np.stack([rank + rng.normal(0, 0.05, n), rng.uniform(-1, 1, n)], axis=1)
+        from scipy.sparse import csr_matrix
+        rows_e = np.concatenate([edges_np[:, 0], edges_np[:, 1]])
+        cols_e = np.concatenate([edges_np[:, 1], edges_np[:, 0]])
+        data_e = np.ones(len(rows_e), dtype=np.float32)
+        adj_sparse = csr_matrix((data_e, (rows_e, cols_e)), shape=(n, n))
+        degree = np.array(adj_sparse.sum(axis=1)).flatten()
     else:
-        embed_2d = np.random.RandomState(42).randn(n, 2)
+        degree = np.ones(n)
 
-    # Map to S²
-    norms_2d = np.linalg.norm(embed_2d, axis=1, keepdims=True)
-    embed_2d = embed_2d / np.clip(norms_2d, 1e-8, None)
     rng = np.random.RandomState(42)
-    theta = np.arccos(np.clip(embed_2d[:, 0], -1, 1)) + rng.normal(0, 0.02, n)
-    phi = np.arctan2(embed_2d[:, 1], embed_2d[:, 0]) + np.pi + rng.normal(0, 0.02, n)
+    rank = np.argsort(np.argsort(-degree)).astype(np.float32) / max(n - 1, 1)
+    theta = rank * np.pi + rng.normal(0, 0.03, n)
+    phi = rng.uniform(0, 2 * np.pi, n)
     theta = np.clip(theta, 0.01, np.pi - 0.01)
     r = args.sphere_radius
     coords = np.stack([r * np.sin(theta) * np.cos(phi), r * np.sin(theta) * np.sin(phi), r * np.cos(theta)], axis=1).astype(np.float32)

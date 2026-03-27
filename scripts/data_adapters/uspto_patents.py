@@ -127,60 +127,38 @@ def build_patent_fingerprints(num_nodes: int, dim: int = 384) -> np.ndarray:
 
 
 def build_coordinates_sparse(edges: np.ndarray, num_nodes: int, sphere_radius: float = 4.5) -> np.ndarray:
-    """Project patents onto S² via approximate spectral embedding."""
+    """Project patents onto S² using fast degree-based layout.
+
+    For million-scale graphs, spectral methods are too slow.
+    Uses node degree to assign latitude (high-degree = poles) and
+    random assignment for longitude, producing a meaningful layout instantly.
+    """
     from scipy.sparse import csr_matrix
-    from scipy.sparse.linalg import eigsh
 
-    logger.info("Computing spectral embedding...")
+    logger.info(f"Computing fast degree-based S² layout for {num_nodes:,} nodes...")
 
-    # Build sparse symmetric adjacency
-    rows = np.concatenate([edges[:, 0], edges[:, 1]])
-    cols = np.concatenate([edges[:, 1], edges[:, 0]])
-    data = np.ones(len(rows), dtype=np.float32)
-    adj = csr_matrix((data, (rows, cols)), shape=(num_nodes, num_nodes))
+    if len(edges) > 0:
+        rows = np.concatenate([edges[:, 0], edges[:, 1]])
+        cols = np.concatenate([edges[:, 1], edges[:, 0]])
+        data = np.ones(len(rows), dtype=np.float32)
+        adj = csr_matrix((data, (rows, cols)), shape=(num_nodes, num_nodes))
+        degree = np.array(adj.sum(axis=1)).flatten()
+    else:
+        degree = np.ones(num_nodes)
 
-    # Normalized Laplacian
-    from scipy.sparse import diags
-    degree = np.array(adj.sum(axis=1)).flatten()
-    d_inv_sqrt = np.where(degree > 0, 1.0 / np.sqrt(degree), 0)
-    D = diags(d_inv_sqrt)
-    L = diags(np.ones(num_nodes)) - D @ adj @ D
-
-    try:
-        if num_nodes > 500000:
-            # For very large graphs, use randomized SVD (much faster than eigsh)
-            from sklearn.utils.extmath import randomized_svd
-            logger.info(f"  Using randomized SVD for {num_nodes:,} nodes...")
-            # Normalized adjacency instead of Laplacian (faster convergence)
-            A_norm = D @ adj @ D
-            U, S, Vt = randomized_svd(A_norm, n_components=3, random_state=42)
-            embed_2d = U[:, 1:3]
-        else:
-            logger.info(f"  Running eigsh for {num_nodes:,} nodes...")
-            eigenvalues, eigenvectors = eigsh(L, k=3, which="SM", maxiter=1000)
-            embed_2d = eigenvectors[:, 1:3]
-    except Exception as e:
-        logger.warning(f"  Spectral embedding failed ({e}), using degree-based layout")
-        # Fallback: place nodes by degree (high-degree = near poles, low-degree = equator)
-        rng = np.random.RandomState(42)
-        degree_rank = np.argsort(np.argsort(-degree)).astype(np.float32) / max(num_nodes - 1, 1)
-        embed_2d = np.stack([
-            degree_rank + rng.normal(0, 0.05, num_nodes),
-            rng.uniform(-1, 1, num_nodes),
-        ], axis=1).astype(np.float32)
-
-    # Map to S²
-    norms = np.linalg.norm(embed_2d, axis=1, keepdims=True)
-    embed_2d = embed_2d / np.clip(norms, 1e-8, None)
-
+    # Degree rank → latitude (high-degree nodes near poles, low-degree near equator)
     rng = np.random.RandomState(42)
-    theta = np.arccos(np.clip(embed_2d[:, 0], -1, 1)) + rng.normal(0, 0.02, num_nodes)
-    phi = np.arctan2(embed_2d[:, 1], embed_2d[:, 0]) + np.pi + rng.normal(0, 0.02, num_nodes)
+    rank = np.argsort(np.argsort(-degree)).astype(np.float32) / max(num_nodes - 1, 1)
+
+    # Map to spherical coordinates with jitter
+    theta = rank * np.pi + rng.normal(0, 0.03, num_nodes)
+    phi = rng.uniform(0, 2 * np.pi, num_nodes)
     theta = np.clip(theta, 0.01, np.pi - 0.01)
 
     x = sphere_radius * np.sin(theta) * np.cos(phi)
     y = sphere_radius * np.sin(theta) * np.sin(phi)
     z = sphere_radius * np.cos(theta)
+    return np.stack([x, y, z], axis=1).astype(np.float32)
     return np.stack([x, y, z], axis=1).astype(np.float32)
 
 
