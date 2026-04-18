@@ -10,7 +10,7 @@ Joint Embedding Predictive Architectures (JEPA) learn representations by predict
 
 JEPA's predictor is *designed*, not *discovered*. TCD-JEPA proposes that predictive modules should **emerge** from the dynamics of the system's own exploration of what it doesn't yet know.
 
-> See [`docs/portfolio.md`](docs/portfolio.md) for the topological crystallization engine portfolio section — 3-part architecture, benchmark wins vs GAT/GCN/GraphSAGE/JEPA, and the 16 interpretable semiconductor modules.
+> See [`docs/portfolio.md`](docs/portfolio.md) for the TCD topological crystallization engine portfolio section — 3-part architecture, benchmark wins vs GAT/GCN/GraphSAGE/JEPA, and the 16 interpretable semiconductor modules.
 
 ## Architecture
 

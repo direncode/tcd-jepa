@@ -1,4 +1,4 @@
-# TCD-JEPA — Topological Crystallization Engine
+# TCD — Topological Crystallization Engine
 
 > **A self-organizing extension of Meta's JEPA that discovers its own predictor architecture at training time and emits typed, interpretable, routable modules at inference time.**
 
@@ -8,7 +8,7 @@
 
 Every mainstream self-supervised backbone — JEPA, I-JEPA, DINOv2, MAE — ships with a *designed* predictor. The geometry of what the model can predict is fixed before it ever sees data.
 
-**TCD-JEPA inverts that.** The predictor is grown from the dynamics of the latent space itself. Three systems cooperate in a closed recursive loop:
+**TCD inverts that.** The predictor is grown from the dynamics of the latent space itself. Three systems cooperate in a closed recursive loop:
 
 | # | System | Role | Mechanism |
 |---|--------|------|-----------|
@@ -44,7 +44,7 @@ The output of System 3 feeds back into System 1 as additional predictor heads, a
 
 ## 2. What gets produced: typed modules at inference time
 
-Unlike black-box embeddings, TCD-JEPA ships **structure**. Every module has:
+Unlike black-box embeddings, TCD ships **structure**. Every module has:
 
 - **A topological type** (H₀ / H₁ / H₂) determining its predictive geometry
 - **A persistence score** — how robust it is across scales of the Vietoris–Rips filtration
@@ -65,19 +65,19 @@ Only features with persistence > `τ_module` are crystallized — noise is filte
 
 ## 3. Empirical results — real heterogeneous graphs
 
-All numbers are **self-supervised** link-prediction AUC on frozen TCD-JEPA embeddings, compared against strong **supervised** GNN baselines and the vanilla JEPA backbone. Evaluated with an identical protocol across methods.
+All numbers are **self-supervised** link-prediction AUC on frozen TCD embeddings, compared against strong **supervised** GNN baselines and the vanilla JEPA backbone. Evaluated with an identical protocol across methods.
 
 ### 3.1 Semiconductor Supply Chain (Georgetown CSET, 519 entities)
 
-| Method | Link AUC | Δ vs TCD-JEPA |
+| Method | Link AUC | Δ vs TCD |
 |--------|---------:|--------------:|
-| **TCD-JEPA (ours)** | **82.7 %** | — |
+| **TCD (ours)** | **82.7 %** | — |
 | GAT (DeepMind) | 70.3 % | **+12.4 pts** |
 | GCN (Google Brain) | 63.9 % | **+18.8 pts** |
 | GraphSAGE | 33.8 % | **+48.9 pts** |
 | Baseline JEPA | 46.1 % | **+36.6 pts** |
 
-> Self-supervised TCD-JEPA **beats every supervised GNN baseline** on a real semiconductor supply-chain graph.
+> Self-supervised TCD **beats every supervised GNN baseline** on a real semiconductor supply-chain graph.
 
 ### 3.2 GDELT Global News Events (380 entities)
 
@@ -85,27 +85,27 @@ All numbers are **self-supervised** link-prediction AUC on frozen TCD-JEPA embed
 |--------|---------:|
 | GAT | 92.1 % |
 | GCN | 85.2 % |
-| **TCD-JEPA (ours)** | **69.1 %** |
+| **TCD (ours)** | **69.1 %** |
 | GraphSAGE | 59.9 % |
 | Baseline JEPA | 47.0 % |
 
-TCD-JEPA improves over baseline JEPA by **+22.1 pts** and over GraphSAGE by **+9.2 pts**. Dense news-event graphs favor supervised message-passing baselines here — the contribution is the consistent lift over JEPA and the production of typed modules that GAT/GCN simply don't emit.
+TCD improves over baseline JEPA by **+22.1 pts** and over GraphSAGE by **+9.2 pts**. Dense news-event graphs favor supervised message-passing baselines here — the contribution is the consistent lift over JEPA and the production of typed modules that GAT/GCN simply don't emit.
 
 ### 3.3 SEC EDGAR Financial Filings (9,725 entities, ~3.9M edges)
 
 | Method | Link AUC | Classification |
 |--------|---------:|---------------:|
-| **TCD-JEPA (ours)** | **66.4 %** | usable |
+| **TCD (ours)** | **66.4 %** | usable |
 | GCN | 90.8 % | ~7 % (near-random) |
 | Baseline JEPA | 46.4 % | — |
 | GAT | **OOM — failed** | — |
 | GraphSAGE | no usable results | — |
 
-At ~10k entities / ~4M edges, GAT runs out of memory and GraphSAGE fails to produce usable embeddings. GCN overfits to edges (90.8 %) but collapses on classification (7 %). **TCD-JEPA is the only method that produces both a stable edge score and interpretable downstream structure at this scale**, while lifting +20 pts over baseline JEPA.
+At ~10k entities / ~4M edges, GAT runs out of memory and GraphSAGE fails to produce usable embeddings. GCN overfits to edges (90.8 %) but collapses on classification (7 %). **TCD is the only method that produces both a stable edge score and interpretable downstream structure at this scale**, while lifting +20 pts over baseline JEPA.
 
 ### 3.4 Qualitative diagnostics on Two Rooms (representation geometry)
 
-| Metric | Vanilla JEPA | TCD-JEPA | Δ |
+| Metric | Vanilla JEPA | TCD | Δ |
 |--------|-------------:|---------:|--:|
 | k-NN (k=1) | 24.33 % | **29.93 %** | +23.0 % rel. |
 | k-NN (k=5) | 26.13 % | **29.73 %** | +13.8 % rel. |
@@ -118,7 +118,7 @@ Crystallization pulls nearest neighbors tighter around semantic basins — exact
 
 ## 4. Interpretable modules — semiconductor case study
 
-Trained on the Georgetown CSET semiconductor graph, TCD-JEPA crystallized **16 interpretable modules**. Each one corresponds to a real cluster in the global semiconductor supply chain, validated against primary sources.
+Trained on the Georgetown CSET semiconductor graph, TCD crystallized **16 interpretable modules**. Each one corresponds to a real cluster in the global semiconductor supply chain, validated against primary sources.
 
 | # | Module | Topological type | Real-world cluster |
 |---|--------|------------------|--------------------|
@@ -168,7 +168,7 @@ This gives you three things static networks can't:
 
 ## 7. Headline claims, in one breath
 
-- Self-supervised TCD-JEPA **beats supervised GAT / GCN / GraphSAGE** on a real semiconductor supply-chain graph (82.7 % vs 70.3 / 63.9 / 33.8).
+- Self-supervised TCD **beats supervised GAT / GCN / GraphSAGE** on a real semiconductor supply-chain graph (82.7 % vs 70.3 / 63.9 / 33.8).
 - Outperforms **baseline JEPA by +20 to +36 pts** across three real heterogeneous graph domains (semiconductor, GDELT, SEC EDGAR).
 - Discovers **16 interpretable modules** that map 1-to-1 onto real semiconductor clusters, including hidden supply-chain dependencies.
 - Produces **typed H₀ / H₁ / H₂ modules at inference** — interpretable, routable, prunable.
