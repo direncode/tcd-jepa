@@ -1,0 +1,20 @@
+{
+  "benchmark": "semiconductor_supply_chain",
+  "graph_source": "Georgetown CSET (Center for Security and Emerging Technology) semiconductor supply-chain data",
+  "graph_type": "heterogeneous",
+  "num_entities": 519,
+  "domain": "physical semiconductor supply chain (design, fab, packaging, specialty chemicals, lithography, and interdependencies)",
+  "task": "self-supervised link prediction (AUC)",
+  "models": [
+    {"model": "Crystara (TCD-JEPA)", "auc": 0.827, "type": "self-supervised", "delta_vs_crystara_pts": 0.0,    "note": "headline result"},
+    {"model": "GAT (DeepMind)",       "auc": 0.703, "type": "supervised",      "delta_vs_crystara_pts": -12.4},
+    {"model": "GCN (Google Brain)",   "auc": 0.639, "type": "supervised",      "delta_vs_crystara_pts": -18.8},
+    {"model": "Baseline JEPA",        "auc": 0.461, "type": "self-supervised", "delta_vs_crystara_pts": -36.6},
+    {"model": "GraphSAGE",            "auc": 0.338, "type": "supervised",      "delta_vs_crystara_pts": -48.9}
+  ],
+  "headline": "+36.6 AUC pts vs baseline JEPA; beats every supervised and self-supervised baseline",
+  "modules_crystallized": 16,
+  "modules_validated_against": ["CSET primary sources", "industry trade data"],
+  "data_adapter": "scripts/data_adapters/eto_semiconductor.py",
+  "baselines_runner": "scripts/gnn_baselines.py"
+}
