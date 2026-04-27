@@ -335,4 +335,4 @@ TCD-JEPA builds on the JEPA paradigm introduced by Yann LeCun and implemented by
 
 ## License
 
-MIT
+Apache License 2.0 — see [LICENSE](LICENSE).
