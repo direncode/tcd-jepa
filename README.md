@@ -1,14 +1,49 @@
-# TCD-JEPA: Tripartite Conditional Dynamics for Joint Embedding Predictive Architectures
+# TCD-JEPA / Crystara: Tripartite Conditional Dynamics for Joint Embedding Predictive Architectures
 
-> Self-organizing modular extensions to JEPA that enable recursive capability growth through energy landscape exploration and topological module crystallization.
+> Self-organizing modular extensions to JEPA that enable recursive capability growth through energy landscape exploration and topological module crystallization. Marketed as **Crystara**, the structure primitive in the horizontal-intelligence stack.
 
 ## Abstract
 
-Joint Embedding Predictive Architectures (JEPA) learn representations by predicting target embeddings from context embeddings in latent space, using a static predictor trained end-to-end. While this paradigm avoids the pitfalls of pixel-level reconstruction, the predictor architecture remains fixed -- its structure is designed, not discovered. TCD-JEPA extends JEPA with three dynamically interacting systems: (1) a **Stream Encoder** that instruments JEPA's context pipeline with information flow monitoring, (2) an **Energy Explorer** that uses Langevin dynamics to probe uncertain regions of the latent energy landscape, and (3) a **Module Crystallizer** that applies persistent homology to exploration trajectories, identifying stable topological features and instantiating them as reusable predictor modules. These systems form a recursive feedback loop where crystallized modules enrich representations, enabling the discovery of predictive capabilities that static architectures cannot achieve. We demonstrate this self-organizing mechanism on CIFAR-10 and a Two Rooms navigation environment, showing module formation, convergence of the recursive loop, and qualitative differences from vanilla JEPA.
+Joint Embedding Predictive Architectures (JEPA) learn representations by predicting target embeddings from context embeddings in latent space, using a static predictor trained end-to-end. While this paradigm avoids the pitfalls of pixel-level reconstruction, the predictor architecture remains fixed -- its structure is designed, not discovered. TCD-JEPA extends JEPA with three dynamically interacting systems: (1) a **Stream Encoder** that instruments JEPA's context pipeline with information flow monitoring, (2) an **Energy Explorer** that uses Langevin dynamics to probe uncertain regions of the latent energy landscape, and (3) a **Module Crystallizer** that applies persistent homology to exploration trajectories, identifying stable topological features and instantiating them as reusable predictor modules. These systems form a recursive feedback loop where crystallized modules enrich representations, enabling the discovery of predictive capabilities that static architectures cannot achieve. We demonstrate this self-organizing mechanism on CIFAR-10, a Two Rooms navigation environment, and three real-world heterogeneous graphs (semiconductor supply chain, GDELT global news, SEC EDGAR), showing module formation, convergence of the recursive loop, and quantitative gains over baseline JEPA and supervised GNNs.
 
 ## Key Insight
 
 JEPA's predictor is *designed*, not *discovered*. TCD-JEPA proposes that predictive modules should **emerge** from the dynamics of the system's own exploration of what it doesn't yet know.
+
+## Graph benchmarks (Crystara)
+
+Self-supervised link prediction (AUC) on three real heterogeneous graphs, against
+baseline JEPA and three supervised GNN baselines (GAT, GCN, GraphSAGE). Full
+tables, JSON artifacts, and an honest assessment live in
+[`results/GRAPH_BENCHMARKS.md`](results/GRAPH_BENCHMARKS.md).
+
+| Benchmark                       | Entities             | Δ vs baseline JEPA |
+|---------------------------------|---------------------:|-------------------:|
+| CSET semiconductor supply chain | 519                  | **+36.6 AUC pts**  |
+| GDELT global news events        | 380                  | **+22.1 AUC pts**  |
+| SEC EDGAR filings               | 9,725 (~3.9M edges)  | **+20.0 AUC pts**  |
+
+On CSET (519 entities), Crystara reaches **82.7% AUC**, beating GAT (DeepMind,
+70.3%), GCN (Google Brain, 63.9%), GraphSAGE (33.8%) and baseline JEPA (46.1%).
+On GDELT (380 entities), Crystara is +22.1 pts over JEPA but behind GAT/GCN —
+the news-event graph has weaker physical-cluster structure than semiconductors.
+On SEC EDGAR (9,725 entities, ~3.9M edges), Crystara is the only model that
+finishes: GAT runs out of memory, GraphSAGE produces no usable output, GCN gets
+90.8% on edges but ~7% on downstream classification.
+
+On the semiconductor graph the pipeline crystallizes **16 interpretable modules**
+that map 1-to-1 to real industry clusters (CMP pipeline, ASML lithography,
+Singapore ATP corridor, China packaging cluster, EUV ↔ etch/clean flows, …) —
+with no labels, no prompting. See
+[`results/graph_benchmarks/semiconductor_modules.json`](results/graph_benchmarks/semiconductor_modules.json).
+
+Reproduction surface:
+
+- Data adapters: `scripts/data_adapters/eto_semiconductor.py`,
+  `scripts/data_adapters/gdelt_events.py`, `scripts/data_adapters/sec_edgar.py`.
+- GNN baselines: `scripts/gnn_baselines.py`.
+- Manifold trainer: `train_manifold.py`, `train_manifold_distributed.py`.
+- Module analysis: `scripts/analyze_modules.py`, `scripts/quick_module_analysis.py`.
 
 ## Architecture
 

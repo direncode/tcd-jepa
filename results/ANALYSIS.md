@@ -5,6 +5,12 @@
 This analysis compares Vanilla JEPA vs TCD-JEPA across multiple experiments,
 model scales, and random seeds.
 
+> For the **graph-benchmark results** (CSET semiconductor, GDELT, SEC EDGAR)
+> against baseline JEPA and supervised GNN baselines, see
+> [`GRAPH_BENCHMARKS.md`](GRAPH_BENCHMARKS.md). The 16 crystallized
+> semiconductor modules and per-benchmark JSON live under
+> [`graph_benchmarks/`](graph_benchmarks/).
+
 ---
 
 ## 1. Original Single-Seed Results (embed_dim=192, depth=6)

@@ -1,0 +1,19 @@
+{
+  "benchmark": "gdelt_global_news_events",
+  "graph_source": "GDELT 2.0 Global Knowledge Graph events (news-derived event graph)",
+  "graph_type": "heterogeneous",
+  "num_entities": 380,
+  "domain": "news-derived event graph (who did what to whom, where, when)",
+  "task": "self-supervised link prediction (AUC)",
+  "models": [
+    {"model": "GAT",                "auc": 0.921, "type": "supervised",      "delta_vs_crystara_pts": 23.0},
+    {"model": "GCN",                "auc": 0.852, "type": "supervised",      "delta_vs_crystara_pts": 16.1},
+    {"model": "Crystara (TCD-JEPA)","auc": 0.691, "type": "self-supervised", "delta_vs_crystara_pts": 0.0},
+    {"model": "GraphSAGE",          "auc": 0.599, "type": "supervised",      "delta_vs_crystara_pts": -9.2},
+    {"model": "Baseline JEPA",      "auc": 0.470, "type": "self-supervised", "delta_vs_crystara_pts": -22.1}
+  ],
+  "headline": "+22.1 AUC pts vs baseline JEPA; behind supervised GAT and GCN",
+  "honest_assessment": "GDELT lacks the physical-cluster structure of the semiconductor graph; the topological-module vocabulary (H0/H1/H2) is a weaker match to its geometry. GAT and GCN outperform Crystara here by a real margin.",
+  "data_adapter": "scripts/data_adapters/gdelt_events.py",
+  "baselines_runner": "scripts/gnn_baselines.py"
+}

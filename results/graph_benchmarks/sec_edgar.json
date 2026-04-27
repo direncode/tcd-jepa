@@ -1,0 +1,20 @@
+{
+  "benchmark": "sec_edgar_financial_filings",
+  "graph_source": "SEC EDGAR 10-K filings",
+  "graph_type": "heterogeneous",
+  "num_entities": 9725,
+  "num_edges_approx": 3900000,
+  "domain": "company / filing / topic graph from public 10-K filings",
+  "task": "self-supervised link prediction (AUC) and downstream classification",
+  "models": [
+    {"model": "Crystara (TCD-JEPA)", "auc": 0.664, "classification_acc": null, "type": "self-supervised", "note": "completed at 9,725 entities; only model that finishes and produces a usable downstream classification number"},
+    {"model": "GCN",                 "auc": 0.908, "classification_acc": 0.07, "type": "supervised",      "note": "edge-reconstruction AUC is high but classification is near-random; the edge number is misleading"},
+    {"model": "Baseline JEPA",       "auc": 0.464, "classification_acc": null, "type": "self-supervised", "delta_vs_crystara_pts": -20.0},
+    {"model": "GraphSAGE",           "auc": null,  "classification_acc": null, "type": "supervised",      "note": "no usable results"},
+    {"model": "GAT",                 "auc": null,  "classification_acc": null, "type": "supervised",      "note": "out of memory"}
+  ],
+  "headline": "+20.0 AUC pts vs baseline JEPA; only model that completes at this scale and produces a usable classification number",
+  "honest_assessment": "This is a scaling story more than an accuracy one. Crystara's 66.4% AUC is not benchmark-leading in absolute terms, but no supervised baseline both scales and classifies usefully, so there is no apples-to-apples comparison.",
+  "data_adapter": "scripts/data_adapters/sec_edgar.py",
+  "baselines_runner": "scripts/gnn_baselines.py"
+}

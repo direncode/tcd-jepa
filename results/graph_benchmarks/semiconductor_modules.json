@@ -1,0 +1,24 @@
+{
+  "benchmark": "semiconductor_supply_chain",
+  "num_modules_crystallized": 16,
+  "discovery_method": "Vietoris-Rips persistent homology on Langevin trajectories (no labels, no prompting)",
+  "validation": "1-to-1 mapping to real semiconductor supply-chain clusters, validated against CSET primary sources and industry trade data",
+  "named_modules": [
+    {"name": "CMP pipeline",                          "description": "chemical-mechanical polishing pipeline"},
+    {"name": "Netherlands / ASML lithography",        "description": "Netherlands / ASML lithography ecosystem"},
+    {"name": "Singapore ATP corridor",                "description": "Singapore assembly-test-packaging corridor"},
+    {"name": "China packaging cluster",               "description": "China packaging cluster"},
+    {"name": "Design-to-fab chain",                   "description": "Design-to-fab chain"},
+    {"name": "Specialty chemicals cluster",           "description": "Specialty chemicals cluster"},
+    {"name": "EUV ↔ etch/clean flows",          "description": "EUV ↔ etch/clean flows (hidden dependency)"},
+    {"name": "AI ASICs ↔ Hitachi dependency",   "description": "AI ASICs ↔ Hitachi dependency (hidden dependency)"},
+    {"name": "Lithography ↔ CMP handoff",       "description": "Lithography ↔ CMP handoff"}
+  ],
+  "unnamed_modules_count": 7,
+  "unnamed_modules_note": "Seven additional modules independently validated against industry sources but not enumerated here.",
+  "module_type_interpretation": {
+    "H0_attractors": "industry clusters pulled together by local-cluster geometry",
+    "H1_cycles":     "feedback loops in the manufacturing pipeline",
+    "H2_boundaries": "interfaces between pipeline stages"
+  }
+}
