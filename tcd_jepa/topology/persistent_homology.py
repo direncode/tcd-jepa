@@ -5,10 +5,22 @@ Computes Vietoris-Rips complexes at multiple scales, tracking:
 - H_1: loops (cycles)
 - H_2: voids (cavities)
 
-Uses giotto-tda as primary backend, falls back to ripser.
+Backend selection (M7 of the SPU custom PH kernel R&D track):
+- OCEAN_PH_BACKEND env var = "ocean" -> route to the OCEAN-built PH kernel
+  (scripts/spu/ocean_ph/run_ocean_ph.py::ocean_ph_diagram). The OCEAN
+  kernel auto-routes to its own CUDA binary when present
+  (OCEAN_PH_KERNEL_BACKEND=auto) or to the pure-Python production path
+  (M1 H0 + M3 H1 + M5 H2) otherwise.
+- OCEAN_PH_BACKEND env var = "giotto" or unset (default) -> existing
+  giotto-tda / ripser fallback chain. Preserves operator behaviour for
+  any caller that has not opted in.
+- The plan-of-plans says: keep the default at the existing third-party
+  backend until the pod run validates OCEAN; the user flips the default
+  after that gate fires green.
 """
 
 import logging
+import os
 from typing import Optional
 
 import numpy as np
@@ -16,9 +28,44 @@ import torch
 
 logger = logging.getLogger("tcd_jepa")
 
+OCEAN_PH_BACKEND_ENV = "OCEAN_PH_BACKEND"
+
 
 def _get_backend():
-    """Detect available persistent homology backend."""
+    """Detect available persistent homology backend.
+
+    Honors OCEAN_PH_BACKEND env var: 'ocean' (route to OCEAN PH kernel),
+    'giotto' (force giotto-tda), 'ripser' (force ripser), or unset
+    (default chain: giotto -> ripser -> scipy fallback).
+    """
+    env_choice = os.environ.get(OCEAN_PH_BACKEND_ENV, "").lower()
+
+    if env_choice == "ocean":
+        # The OCEAN kernel is dep-free at the wrapper level; it owns its
+        # own backend selection (auto -> CUDA ph_bench when built, else
+        # pure-Python production path). Returning "ocean" here delegates.
+        return "ocean"
+
+    if env_choice == "giotto":
+        try:
+            from gtda.homology import VietorisRipsPersistence  # noqa: F401
+            return "giotto"
+        except ImportError:
+            logger.warning(
+                "OCEAN_PH_BACKEND=giotto but giotto-tda not installed; "
+                "falling through to the default chain."
+            )
+
+    if env_choice == "ripser":
+        try:
+            from ripser import ripser  # noqa: F401
+            return "ripser"
+        except ImportError:
+            logger.warning(
+                "OCEAN_PH_BACKEND=ripser but ripser not installed; "
+                "falling through to the default chain."
+            )
+
     try:
         from gtda.homology import VietorisRipsPersistence  # noqa: F401
         return "giotto"
@@ -77,6 +124,8 @@ class PersistentHomologyComputer:
             indices = rng.choice(points.shape[0], max_points, replace=False)
             points = points[indices]
 
+        if self._backend == "ocean":
+            return self._compute_ocean(points)
         if self._backend == "giotto":
             return self._compute_giotto(points)
         elif self._backend == "ripser":
@@ -87,6 +136,25 @@ class PersistentHomologyComputer:
                 "(only H0 via single-linkage). Install giotto-tda or ripser for full PH."
             )
             return self._compute_fallback(points)
+
+    def _compute_ocean(self, points: np.ndarray) -> dict[str, np.ndarray]:
+        """Compute via the OCEAN PH kernel.
+
+        The OCEAN wrapper (scripts/spu/ocean_ph/run_ocean_ph.py) returns a
+        unified [K, 3] diagram of (birth, death, dim) with finite deaths
+        only and diagonal pairs already stripped. We split it back into
+        per-dimension arrays for the operator's existing API contract.
+        """
+        # Lazy import: the operator does not depend on the OCEAN package
+        # unless OCEAN_PH_BACKEND=ocean is set.
+        from scripts.spu.ocean_ph import ocean_ph_diagram
+
+        diagram = ocean_ph_diagram(points, max_dim=self.max_homology_dim)
+        result = {"diagram": diagram}
+        for dim in range(self.max_homology_dim + 1):
+            mask = diagram[:, 2] == dim
+            result[f"H{dim}"] = diagram[mask][:, :2]
+        return result
 
     def _compute_giotto(self, points: np.ndarray) -> dict[str, np.ndarray]:
         """Compute using giotto-tda."""
