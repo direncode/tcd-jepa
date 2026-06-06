@@ -398,7 +398,16 @@ def train(
     )
 
     # ── Model ─────────────────────────────────────────────────────────
-    predictor_embed_dim = max(embed_dim // 2, 32)
+    # Dims must divide num_heads (attention reshape); the predictor's 2D sin-cos
+    # pos-embed additionally needs divisibility by 4. max(embed_dim//2, 32) does
+    # NOT guarantee either, so any caller overriding embedding_dim (the RunPod
+    # handler uses 64/128/256) crashed the predictor at construction and silently
+    # fell back to the simulation path. Snap both up to the nearest valid multiple.
+    from math import gcd
+    pred_mult = num_heads * 4 // gcd(num_heads, 4)  # lcm(num_heads, 4)
+    embed_dim = ((embed_dim + num_heads - 1) // num_heads) * num_heads
+    base_pred = max(embed_dim // 2, 32)
+    predictor_embed_dim = ((base_pred + pred_mult - 1) // pred_mult) * pred_mult
 
     model = build_manifold_jepa(
         fingerprint_dim=fp_dim,

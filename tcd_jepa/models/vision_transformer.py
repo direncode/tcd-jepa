@@ -104,6 +104,10 @@ class Attention(nn.Module):
         proj_drop: float = 0.0,
     ):
         super().__init__()
+        assert dim % num_heads == 0, (
+            f"Attention dim ({dim}) must be divisible by num_heads ({num_heads}); "
+            "otherwise the qkv reshape silently drops channels and fails at runtime."
+        )
         self.num_heads = num_heads
         head_dim = dim // num_heads
         self.scale = qk_scale or head_dim**-0.5
