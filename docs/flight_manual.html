@@ -1,33 +1,16 @@
 <title>How TCD-JEPA Works</title>
 <style>
-:root{
-  --paper:#F7F8F9; --page:#FFFFFF; --sunk:#EEF1F3; --panel:#F2F4F6;
-  --ink:#15181C; --ink2:#4A535C; --ink3:#7C858D;
-  --rule:#DCE1E5; --rule2:#E8ECEF;
+/* White-paper document. Deliberately single-theme: every colour is painted
+   explicitly so the page holds its own ground in any viewer theme. */
+:root, :root[data-theme="dark"], :root[data-theme="light"]{
+  --paper:#FFFFFF; --page:#FFFFFF; --sunk:#F3F5F7; --panel:#F8FAFB;
+  --ink:#15181B; --ink2:#4C555D; --ink3:#7E888F;
+  --rule:#E1E6E9; --rule2:#ECF0F2;
   --s1:#12617D; --s2:#A8481A; --s3:#4E4194;
-  --s1b:rgba(18,97,125,.09); --s2b:rgba(168,72,26,.09); --s3b:rgba(78,65,148,.09);
+  --s1b:rgba(18,97,125,.08); --s2b:rgba(168,72,26,.08); --s3b:rgba(78,65,148,.08);
   --warn:#7A5C10; --good:#1D6642;
-  --code-bg:#FBFCFC;
-}
-@media (prefers-color-scheme:dark){
-  :root:not([data-theme="light"]){
-    --paper:#0B0D10; --page:#101317; --sunk:#161A1F; --panel:#14181D;
-    --ink:#DCE2E8; --ink2:#95A1AC; --ink3:#6B7681;
-    --rule:#252C33; --rule2:#1B2127;
-    --s1:#5CB8DA; --s2:#ED8B52; --s3:#A497E8;
-    --s1b:rgba(92,184,218,.11); --s2b:rgba(237,139,82,.11); --s3b:rgba(164,151,232,.11);
-    --warn:#D8B44C; --good:#5AC08C;
-    --code-bg:#0D1114;
-  }
-}
-:root[data-theme="dark"]{
-  --paper:#0B0D10; --page:#101317; --sunk:#161A1F; --panel:#14181D;
-  --ink:#DCE2E8; --ink2:#95A1AC; --ink3:#6B7681;
-  --rule:#252C33; --rule2:#1B2127;
-  --s1:#5CB8DA; --s2:#ED8B52; --s3:#A497E8;
-  --s1b:rgba(92,184,218,.11); --s2b:rgba(237,139,82,.11); --s3b:rgba(164,151,232,.11);
-  --warn:#D8B44C; --good:#5AC08C;
-  --code-bg:#0D1114;
+  --code-bg:#FDFEFE;
+  color-scheme:light;
 }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
